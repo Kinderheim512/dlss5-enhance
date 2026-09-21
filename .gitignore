@@ -1,0 +1,11 @@
+.venv/
+.tmp-it/
+logs/
+.ruff_cache/
+__pycache__/
+*.pyc
+build/
+dist/
+settings.json
+tools/
+downloads/

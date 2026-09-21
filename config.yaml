@@ -1,0 +1,84 @@
+# dlss5-enhance configuration.
+# Every value here can be overridden on the command line.
+# ComfyUI paths are detected on the first run and remembered in settings.json.
+
+presets:
+  ameliore:
+    label: Enhance (1x)
+    upscaling_mode: 1x (DLAA / native)
+    quality: Best
+    codec: h265
+    container: mkv
+  ameliore_plus:
+    label: Enhance+ (1x)
+    upscaling_mode: 1x (DLAA / native)
+    quality: Best
+    codec: h265
+    container: mkv
+    settings:
+      local_structure_strength: 2.0
+  x15:
+    label: Upscale x1.5
+    upscaling_mode: 1.5x (Quality)
+    quality: Best
+    codec: h265
+    container: mkv
+  x2:
+    label: Upscale x2
+    upscaling_mode: 2x (Performance)
+    quality: Best
+    codec: h265
+    container: mkv
+  x3:
+    label: Upscale x3
+    upscaling_mode: 3x (Ultra Performance)
+    quality: Best
+    codec: h265
+    container: mkv
+
+comfy:
+  root:                      # empty = detected on first run (or --comfy-root)
+  python:                    # empty = derived from root
+  server_module: ComfyUI/main.py
+  host: 127.0.0.1
+  port: 8188
+  startup_timeout: 240       # a cold ComfyUI start takes about 30 s
+  extra_model_paths_config:  # optional, DLSS5 needs no model
+  ffmpeg:                    # empty = the node's bundled ffmpeg
+  ffprobe:
+  server_log_dir: logs
+  extra_args: []             # extra ComfyUI arguments, e.g. ["--cache-classic"]
+
+workflow:
+  path: workflows/exemple_dlss5_video.json
+  target:                    # resolved by id, else title, else class_type
+    class_type: DLSS5EnhanceVideoFile
+    title:
+    id:
+  settings:
+    class_type: DLSS5Settings
+    upscaling_input: upscaling_mode
+
+processing:
+  quality: Auto
+  codec: HEVC
+  container: MKV
+  max_frames: 0
+  copy_audio: true
+  verify_neural_rendering: true
+  output:                    # empty = your Downloads folder
+  extensions: [mp4, mov, mkv, webm]
+  timeout: 1200
+  max_restarts: 3
+
+logging:
+  dir: logs
+  level: INFO
+
+language:                    # en (default) or fr
+
+run:
+  autostart: true
+  keep_server: false
+  auto_restart:              # empty = ask, true/false = force
+  preset:                    # default preset when --preset is not given

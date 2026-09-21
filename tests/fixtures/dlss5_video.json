@@ -1,0 +1,37 @@
+{
+  "1": {
+    "class_type": "DLSS5Settings",
+    "inputs": {
+      "upscaling_mode": "2x (Performance)",
+      "nr_preset": "Default",
+      "nr_style": "Default",
+      "nr_intensity": 1.0,
+      "local_tone_strength": 1.0,
+      "local_structure_strength": 1.5,
+      "skin_structure_strength": 2.0,
+      "automatic_mask": true,
+      "dlss_model_preset": "M",
+      "motion": "auto",
+      "scene_change_threshold": 0.24,
+      "warmup_frames": 0,
+      "runtime_dir": ""
+    },
+    "_meta": {"title": "DLSS5 Settings"}
+  },
+  "2": {
+    "class_type": "DLSS5EnhanceVideoFile",
+    "inputs": {
+      "video_path": "",
+      "settings": ["1", 0],
+      "codec": "HEVC",
+      "container": "MKV",
+      "quality": "Auto",
+      "filename_prefix": "DLSS5",
+      "output_directory": "",
+      "max_frames": 0,
+      "copy_audio": true,
+      "verify_neural_rendering": true
+    },
+    "_meta": {"title": "DLSS5 Enhance Video File"}
+  }
+}
