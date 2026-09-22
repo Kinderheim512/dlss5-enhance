@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from .app_paths import TOOL_ROOT
@@ -18,26 +18,46 @@ class AppSettings:
     language: str | None = None
     comfy_root: str | None = None
     comfy_python: str | None = None
+    comfy_port: int | None = None
     ffmpeg: str | None = None
     ffprobe: str | None = None
     output_dir: str | None = None
     workflow: str | None = None
     preset: str | None = None
     source: str | None = None
+    sources: list[str] = field(default_factory=list)
+    container: str | None = None
+    codec: str | None = None
+    settings: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
-        return {key: value for key, value in asdict(self).items() if value is not None}
+        return {
+            key: value
+            for key, value in asdict(self).items()
+            if value not in (None, [], {})
+        }
 
     @classmethod
     def from_dict(cls, raw: object) -> AppSettings:
         if not isinstance(raw, dict):
             return cls()
-        known = {field.name for field in fields(cls)}
-        clean = {
-            key: str(value)
-            for key, value in raw.items()
-            if key in known and isinstance(value, (str, int, float))
-        }
+        known = {item.name for item in fields(cls)}
+        clean: dict[str, object] = {}
+        for key, value in raw.items():
+            if key not in known:
+                continue
+            if key == "comfy_port" and isinstance(value, (int, float, str)):
+                clean[key] = int(value)
+            elif key == "sources" and isinstance(value, list):
+                clean[key] = [str(item) for item in value]
+            elif key == "settings" and isinstance(value, dict):
+                clean[key] = {
+                    str(name): item
+                    for name, item in value.items()
+                    if isinstance(item, (str, int, float, bool))
+                }
+            elif isinstance(value, (str, int, float)):
+                clean[key] = str(value)
         return cls(**clean)
 
 

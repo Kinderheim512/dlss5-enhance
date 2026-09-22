@@ -169,6 +169,21 @@ def _inject(prompt: dict[str, Any], node_id: str, values: Mapping[str, Any]) -> 
         node["inputs"][key] = value
 
 
+def read_settings_values(
+    workflow: Mapping[str, Any],
+    class_type: str,
+    names: Iterable[str],
+) -> dict[str, Any]:
+    """Current values of the given inputs on the DLSS5 Settings node."""
+    wanted = tuple(names)
+    for node in workflow.values():
+        if node.get("class_type") != class_type:
+            continue
+        inputs = node.get("inputs") or {}
+        return {name: inputs[name] for name in wanted if name in inputs}
+    return {}
+
+
 def read_upscaling_mode(
     workflow: Mapping[str, Any],
     settings_class_type: str = "DLSS5Settings",

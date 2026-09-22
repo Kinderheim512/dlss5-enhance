@@ -12,12 +12,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO
 
-from .comfy_client import ComfyClient
+from .comfy_client import ComfyClient, ComfyError
 from .config import ComfyConfig
 from .errors import ServerError
 from .i18n import tr
-
-CREATE_NO_WINDOW = 0x08000000
+from .spawn import popen_hidden, run_hidden
 
 _NETSTAT_LINE = re.compile(
     r"^\s*TCP\s+(?P<local>\S+):(?P<port>\d+)\s+\S+\s+(?P<state>\S+)\s+(?P<pid>\d+)\s*$"
@@ -65,38 +64,54 @@ class ComfyServer:
         self.cfg = cfg
         self.client = client
         self.logger = logger
+        self.port = cfg.port
         self._handle = ServerHandle()
         self._last_http_check = 0.0
         self._http_failures = 0
 
-    def listener_pid(self) -> int | None:
-        """PID holding the ComfyUI port, from netstat."""
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.cfg.host}:{self.port}"
+
+    @property
+    def ws_url(self) -> str:
+        return f"ws://{self.cfg.host}:{self.port}/ws"
+
+    def fallback_ports(self) -> list[int]:
+        """Ports to try, in order, when the configured one is unusable."""
+        seen: list[int] = []
+        for port in (self.cfg.port, *self.cfg.port_fallback):
+            if port not in seen:
+                seen.append(port)
+        return seen
+
+    def listener_pid(self, port: int | None = None) -> int | None:
+        """PID holding a port, from netstat."""
         try:
-            result = subprocess.run(
-                ["netstat", "-ano", "-p", "tcp"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                creationflags=CREATE_NO_WINDOW,
-            )
+            result = run_hidden(["netstat", "-ano", "-p", "tcp"], timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             return None
-        return _parse_listener_pid(result.stdout, self.cfg.port)
+        return _parse_listener_pid(result.stdout, self.port if port is None else port)
+
+    def responds(self, port: int) -> bool:
+        """True when a ComfyUI answers /system_stats on that port."""
+        probe = ComfyClient(f"http://{self.cfg.host}:{port}", timeout=5.0)
+        return probe.is_alive()
+
+    def has_dlss5_node(self, port: int) -> bool:
+        """True when that server has the DLSS5 node loaded."""
+        probe = ComfyClient(f"http://{self.cfg.host}:{port}", timeout=10.0)
+        try:
+            return probe.object_info("DLSS5EnhanceVideoFile") is not None
+        except ComfyError:
+            return False
 
     def process_name(self, pid: int | None) -> str | None:
         if not pid:
             return None
         try:
-            result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                creationflags=CREATE_NO_WINDOW,
+            result = run_hidden(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], timeout=30
             )
         except (OSError, subprocess.TimeoutExpired):
             return None
@@ -108,15 +123,7 @@ class ComfyServer:
     def desktop_app(self) -> str | None:
         """Name of a running ComfyUI Desktop / Electron process, if any."""
         try:
-            result = subprocess.run(
-                ["tasklist", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                creationflags=CREATE_NO_WINDOW,
-            )
+            result = run_hidden(["tasklist", "/FO", "CSV", "/NH"], timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             return None
         for line in (result.stdout or "").splitlines():
@@ -131,15 +138,7 @@ class ComfyServer:
     def stray_workers(self) -> list[str]:
         """Leftover DLSS5 native workers, which would keep the GPU busy."""
         try:
-            result = subprocess.run(
-                ["tasklist", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                creationflags=CREATE_NO_WINDOW,
-            )
+            result = run_hidden(["tasklist", "/FO", "CSV", "/NH"], timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             return []
         found: list[str] = []
@@ -154,44 +153,43 @@ class ComfyServer:
         return found
 
     def ensure(self, autostart: bool) -> ServerHandle:
-        """Return a usable server, starting one when needed."""
-        if self.client.is_alive():
-            pid = self.listener_pid()
-            name = self.process_name(pid)
-            if is_tunnel_process(name):
-                raise ServerError(
-                    tr(
-                        "v.tunnel_detected",
-                        port=self.cfg.port,
-                        name=name,
-                        pid=pid,
-                    )
-                )
-            owner = f"{name} (PID {pid})" if name else f"PID {pid}"
-            self.logger.warning(
-                tr("v.reuse", url=self.cfg.base_url, owner=owner)
-            )
-            desktop = self.desktop_app()
-            if desktop:
-                self.logger.warning(tr("v.desktop_shared", name=desktop))
-            return ServerHandle(process=None, started_by_us=False, log_path=self._latest_log())
+        """Return a usable **local** server: reuse one, or start our own.
 
-        pid = self.listener_pid()
-        if pid is not None:
-            name = self.process_name(pid)
-            raise ServerError(
-                tr(
-                    "v.port_busy",
-                    port=self.cfg.port,
-                    name=name or tr("v.other_process"),
-                    pid=pid,
-                )
+        A port held by an SSH tunnel (or by anything that is not a ComfyUI) is
+        never used: the DLSS5 worker has to run locally. When that happens the
+        tool moves to the next free port instead of refusing to work.
+        """
+        if self._reuse_configured():
+            return self._handle
+
+        found = self._find_local_with_node()
+        if found is not None:
+            self.port = found
+            self.client.base_url = self.base_url
+            self.logger.info(tr("v.found_local", port=found, url=self.base_url))
+            self._warn_shared()
+            self._handle = ServerHandle(
+                process=None, started_by_us=False, log_path=self._latest_log()
             )
+            return self._handle
 
         if not autostart:
-            raise ServerError(tr("v.no_autostart", url=self.cfg.base_url))
+            raise ServerError(tr("v.no_autostart", url=self.base_url))
 
         self._validate_launch()
+        port = self._first_free_port()
+        if port is None:
+            raise ServerError(
+                tr(
+                    "v.no_free_port",
+                    ports=", ".join(str(item) for item in self.fallback_ports()),
+                )
+            )
+        if port != self.cfg.port:
+            self.logger.warning(tr("v.fallback_port", configured=self.cfg.port, port=port))
+        self.port = port
+        self.client.base_url = self.base_url
+
         process, log_path, log_stream = self.start()
         self._handle = ServerHandle(
             process=process, started_by_us=True, log_path=log_path, log_stream=log_stream
@@ -201,25 +199,86 @@ class ComfyServer:
             tail = "\n".join(self.tail_log(20))
             self.stop(self._handle)
             if died:
-                message = tr("v.start_died", url=self.cfg.base_url)
+                message = tr("v.start_died", url=self.base_url)
             else:
                 message = tr(
                     "v.start_timeout",
-                    url=self.cfg.base_url,
+                    url=self.base_url,
                     seconds=self.cfg.startup_timeout,
                 )
             raise ServerError(f"{message}\n{tail}")
-        self.logger.info(tr("v.ready", url=self.cfg.base_url, pid=process.pid))
+        self.logger.info(tr("v.ready", url=self.base_url, pid=process.pid))
         return self._handle
 
+    def _reuse_configured(self) -> bool:
+        """Reuse the configured port when a local ComfyUI with the node lives there."""
+        if not self.responds(self.cfg.port):
+            return False
+        pid = self.listener_pid(self.cfg.port)
+        name = self.process_name(pid)
+        if is_tunnel_process(name):
+            self.logger.warning(
+                tr("v.tunnel_detected", port=self.cfg.port, name=name, pid=pid)
+            )
+            return False
+        if not self.has_dlss5_node(self.cfg.port):
+            self.logger.warning(
+                tr(
+                    "v.node_missing_server",
+                    url=f"http://{self.cfg.host}:{self.cfg.port}",
+                    path=self.node_folder() or "custom_nodes",
+                )
+            )
+            return False
+        self.port = self.cfg.port
+        self.client.base_url = self.base_url
+        owner = f"{name} (PID {pid})" if name else f"PID {pid}"
+        self.logger.warning(tr("v.reuse", url=self.base_url, owner=owner))
+        self._warn_shared()
+        self._handle = ServerHandle(
+            process=None, started_by_us=False, log_path=self._latest_log()
+        )
+        return True
+
+    def _warn_shared(self) -> None:
+        self.logger.warning(tr("v.shared_warning"))
+        desktop = self.desktop_app()
+        if desktop:
+            self.logger.warning(tr("v.desktop_shared", name=desktop))
+
+    def _find_local_with_node(self) -> int | None:
+        """Another local ComfyUI, on a fallback port, that has the node loaded."""
+        for port in self.fallback_ports():
+            if port == self.cfg.port:
+                continue
+            if self.responds(port) and self.has_dlss5_node(port):
+                return port
+        return None
+
+    def _first_free_port(self) -> int | None:
+        for port in self.fallback_ports():
+            if self.listener_pid(port) is None and not self.responds(port):
+                return port
+        return None
+
+    def node_folder(self) -> Path | None:
+        from . import installer
+
+        if self.cfg.root is None:
+            return None
+        return installer.node_dir(Path(self.cfg.root))
+
     def _validate_launch(self) -> None:
-        if not self.cfg.root.is_dir():
+        if self.cfg.root is None or not Path(self.cfg.root).is_dir():
             raise ServerError(tr("v.root_missing", path=self.cfg.root))
-        if not self.cfg.python.is_file():
+        if self.cfg.python is None or not Path(self.cfg.python).is_file():
             raise ServerError(tr("v.python_missing", path=self.cfg.python))
-        module = self.cfg.root / self.cfg.server_module
+        module = Path(self.cfg.root) / self.cfg.server_module
         if not module.is_file():
             raise ServerError(tr("v.module_missing", path=module))
+        node = self.node_folder()
+        if node is None or not (node / "nodes" / "enhance_video.py").is_file():
+            raise ServerError(tr("v.node_not_installed", path=node or "custom_nodes"))
 
     def start(self) -> tuple[subprocess.Popen, Path, IO[str]]:
         log_dir = self.cfg.server_log_dir or (self.cfg.root / "logs")
@@ -228,7 +287,7 @@ class ComfyServer:
         stream = open(log_path, "a", encoding="utf-8", errors="replace")
         stream.write(f"\n=== dlss5-enhance: start {datetime.now():%Y-%m-%d %H:%M:%S} ===\n")
         stream.flush()
-        command = self.cfg.server_command()
+        command = self.cfg.server_command(self.port)
         if self.cfg.extra_model_paths_config and not self.cfg.extra_model_paths_config.is_file():
             self.logger.warning(
                 tr("v.extra_paths_missing", path=self.cfg.extra_model_paths_config)
@@ -239,14 +298,13 @@ class ComfyServer:
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
         try:
-            process = subprocess.Popen(
+            process = popen_hidden(
                 command,
                 cwd=str(self.cfg.root),
                 env=environment,
                 stdout=stream,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                creationflags=CREATE_NO_WINDOW,
             )
         except OSError as exc:
             stream.close()

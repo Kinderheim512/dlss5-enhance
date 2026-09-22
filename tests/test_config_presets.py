@@ -11,8 +11,15 @@ class PresetConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = load_config(path=Path(tmp) / "absent.yaml", base_dir=Path(tmp))
         self.assertEqual(
-            sorted(config.presets), ["ameliore", "ameliore_plus", "x15", "x2", "x3"]
+            sorted(config.presets),
+            ["ameliore", "ameliore_plus", "x15", "x2", "x2_plus", "x3", "x3_plus"],
         )
+        combined = config.presets["x2_plus"]
+        self.assertEqual(combined.factor, 2.0)
+        self.assertEqual(combined.settings["local_structure_strength"], 2.0)
+        self.assertEqual(combined.settings["skin_structure_strength"], 2.0)
+        self.assertIs(combined.settings["automatic_mask"], True)
+        self.assertEqual(combined.settings["dlss_model_preset"], "M")
         self.assertEqual(config.presets["x2"].factor, 2.0)
         self.assertEqual(config.presets["x3"].factor, 3.0)
         self.assertEqual(config.presets["ameliore"].factor, 1.0)

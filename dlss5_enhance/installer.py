@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import subprocess
 import tempfile
 import urllib.error
 import urllib.request
@@ -14,6 +13,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from .i18n import tr
+from .spawn import run_hidden
 
 COMFY_RELEASES_API = "https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest"
 COMFY_ASSET = "ComfyUI_windows_portable_nvidia.7z"
@@ -32,7 +32,6 @@ RUNTIME_FILES = (
 )
 
 CHUNK = 1024 * 1024
-CREATE_NO_WINDOW = 0x08000000
 
 ProgressFn = Callable[[str, int, int], None]
 
@@ -124,14 +123,7 @@ def ensure_7zr(app_dir: Path, progress: ProgressFn | None = None) -> Path:
 def extract_7z(archive: Path, dest: Path, seven_zip: Path) -> None:
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [str(seven_zip), "x", str(archive), f"-o{dest}", "-y"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=CREATE_NO_WINDOW,
-    )
+    result = run_hidden([str(seven_zip), "x", str(archive), f"-o{dest}", "-y"])
     if result.returncode != 0:
         tail = (result.stdout or result.stderr or "").strip().splitlines()
         raise InstallError(tail[-1] if tail else "7zr failed")
@@ -216,14 +208,7 @@ def install_node(comfy_root: Path, progress: ProgressFn | None = None) -> Path:
 def pip_install(python: Path, packages: Iterable[str], logger=None) -> None:
     """Install the node's requirements into ComfyUI's interpreter."""
     command = [str(python), "-m", "pip", "install", "--quiet", *packages]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=CREATE_NO_WINDOW,
-    )
+    result = run_hidden(command)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()
         raise InstallError(detail[-1] if detail else "pip install failed")
@@ -248,15 +233,7 @@ def install_runtime(
     else:
         command += ["--yes"]
         _progress(progress, "runtime", 0, 0)
-    result = subprocess.run(
-        command,
-        cwd=str(node),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=CREATE_NO_WINDOW,
-    )
+    result = run_hidden(command, cwd=str(node))
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()
         raise InstallError(detail[-1] if detail else "install_runtime.py failed")
@@ -293,14 +270,7 @@ def make_test_clip(ffmpeg: Path, dest: Path, seconds: float = 1.0) -> Path:
         "-shortest",
         str(dest),
     ]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=CREATE_NO_WINDOW,
-    )
+    result = run_hidden(command)
     if result.returncode != 0:
         raise InstallError("could not build the test clip")
     return dest

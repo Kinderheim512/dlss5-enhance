@@ -1,4 +1,4 @@
-"""Tkinter front-end: pick a preset, run the batch, watch it live."""
+"""Tkinter front-end: a queue of files, presets, DLSS5 sliders, live log."""
 
 from __future__ import annotations
 
@@ -12,17 +12,28 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__, doctor, installer
-from .app_paths import TOOL_ROOT
+from .app_paths import TOOL_ROOT, icon_path
 from .comfy_client import ComfyError
 from .config import Config, load_config
+from .dlss5_settings import SETTINGS, coerce_all, validate
 from .errors import ServerError, UsageError, WorkflowError
 from .i18n import LANGUAGE_LABELS, LANGUAGES, resolve_language, set_language, tr
 from .logging_setup import setup_logging
+from .mappings import CODECS, CONTAINERS, resolve_codec, resolve_container
 from .runner import Orchestrator
-from .settings_store import load_settings, save_settings, store_path
+from .settings_store import load_settings, resolve_path, save_settings, store_path
 from .sink import CLEAR, DONE, LINE, LOG, PROGRESS, STATUS, QueueSink
-from .sources import resolve_sources
-from .workflow import missing_workflow_message
+from .sources import resolve_many
+from .workflow import load_workflow, missing_workflow_message, read_settings_values
+
+try:  # native drag and drop; the window still works without it
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+
+    DND_AVAILABLE = True
+except Exception:
+    DND_AVAILABLE = False
+    DND_FILES = None
+    TkinterDnD = None
 
 POLL_MS = 100
 PERCENT = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
@@ -46,25 +57,41 @@ class App:
         self.config: Config | None = None
         self.output_dir: Path | None = None
         self.setup_dialog: SetupDialog | None = None
+        self.queue: list[Path] = []
+        self.setting_vars: dict[str, tk.Variable] = {}
+        self.setting_dirty: set[str] = set()
+        self.setting_widgets: list[tk.Widget] = []
+
         self.settings, self.settings_file = load_settings(path=state_path, app_root=TOOL_ROOT)
         set_language(resolve_language(self.settings.language))
 
         self.preset_var = tk.StringVar()
-        self.source_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.workflow_var = tk.StringVar()
+        self.container_var = tk.StringVar(value=self.settings.container or "MKV")
+        self.codec_var = tk.StringVar(value=self.settings.codec or "HEVC")
         self.status_var = tk.StringVar(value=tr("u.ready"))
         self.mode_var = tk.StringVar(value="")
+        self.queue_var = tk.StringVar(value="")
         self.language_var = tk.StringVar(
             value=LANGUAGE_LABELS[resolve_language(self.settings.language)]
         )
         self.force_var = tk.BooleanVar(value=False)
+        self.advanced_var = tk.BooleanVar(value=False)
         self._texts: list[tuple[object, str, str]] = []
 
+        self._set_icon()
         self._build()
         self._load_config()
         self.root.after(POLL_MS, self._drain)
         self.root.after(400, self._maybe_first_run_setup)
+
+    def _set_icon(self) -> None:
+        icon = icon_path()
+        if icon is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            self.root.iconbitmap(default=str(icon))
 
     def _t(self, widget, key: str, attr: str = "text") -> None:
         self._texts.append((widget, key, attr))
@@ -75,8 +102,8 @@ class App:
 
     def _build(self) -> None:
         self.root.title(tr("u.title", version=__version__))
-        self.root.geometry("980x760")
-        self.root.minsize(860, 640)
+        self.root.geometry("1020x900")
+        self.root.minsize(880, 700)
 
         top = ttk.Frame(self.root)
         top.pack(fill="x", padx=10, pady=(10, 0))
@@ -96,51 +123,199 @@ class App:
         self.language_box.pack(side="right")
         self.language_box.bind("<<ComboboxSelected>>", self._on_language)
 
-        self.preset_frame = ttk.LabelFrame(self.root, padding=8)
-        self.preset_frame.pack(fill="x", padx=10, pady=(8, 6))
+        self.tabs = ttk.Notebook(self.root)
+        self.tabs.pack(fill="both", expand=False, padx=10, pady=8)
+        files_tab = ttk.Frame(self.tabs, padding=8)
+        settings_tab = ttk.Frame(self.tabs, padding=8)
+        self.tabs.add(files_tab, text=tr("u.tab.files"))
+        self.tabs.add(settings_tab, text=tr("u.tab.settings"))
+        self._files_tab = files_tab
+        self._settings_tab = settings_tab
+        self._build_files_tab(files_tab)
+        self._build_settings_tab(settings_tab)
+        self._build_actions()
+        self._build_progress_and_log()
+
+    def _build_files_tab(self, parent: ttk.Frame) -> None:
+        self.preset_frame = ttk.LabelFrame(parent, padding=8)
+        self.preset_frame.pack(fill="x")
         self._t(self.preset_frame, "u.section.preset", "text")
         self.preset_row = ttk.Frame(self.preset_frame)
         self.preset_row.pack(fill="x")
 
-        self.source_frame = ttk.LabelFrame(self.root, padding=8)
-        self.source_frame.pack(fill="x", padx=10, pady=6)
-        self._t(self.source_frame, "u.section.source", "text")
-        row = ttk.Frame(self.source_frame)
-        row.pack(fill="x")
-        self.file_button = ttk.Button(row, command=self._pick_file)
-        self._t(self.file_button, "u.pick_file")
-        self.file_button.pack(side="left")
-        self.folder_button = ttk.Button(row, command=self._pick_folder)
-        self._t(self.folder_button, "u.pick_folder")
-        self.folder_button.pack(side="left", padx=6)
-        self.source_label = ttk.Label(self.source_frame, textvariable=self.source_var)
-        self.source_label.pack(fill="x", pady=(6, 0))
+        queue_frame = ttk.LabelFrame(parent, padding=8)
+        queue_frame.pack(fill="both", expand=True, pady=6)
+        self._t(queue_frame, "u.section.queue", "text")
+        buttons = ttk.Frame(queue_frame)
+        buttons.pack(fill="x")
+        self.add_files_button = ttk.Button(buttons, command=self._pick_files)
+        self._t(self.add_files_button, "u.add_files")
+        self.add_files_button.pack(side="left")
+        self.add_folder_button = ttk.Button(buttons, command=self._pick_folder)
+        self._t(self.add_folder_button, "u.add_folder")
+        self.add_folder_button.pack(side="left", padx=6)
+        self.remove_button = ttk.Button(buttons, command=self._remove_selected)
+        self._t(self.remove_button, "u.remove")
+        self.remove_button.pack(side="left")
+        self.clear_button = ttk.Button(buttons, command=self._clear_queue)
+        self._t(self.clear_button, "u.clear")
+        self.clear_button.pack(side="left", padx=6)
 
-        self.paths_frame = ttk.LabelFrame(self.root, padding=8)
-        self.paths_frame.pack(fill="x", padx=10, pady=6)
-        self._t(self.paths_frame, "u.section.paths", "text")
-        self.paths_frame.columnconfigure(1, weight=1)
-        self.output_label = ttk.Label(self.paths_frame)
+        list_row = ttk.Frame(queue_frame)
+        list_row.pack(fill="both", expand=True, pady=(6, 0))
+        self.queue_list = tk.Listbox(list_row, height=6, selectmode="extended")
+        queue_scroll = ttk.Scrollbar(list_row, orient="vertical", command=self.queue_list.yview)
+        self.queue_list.configure(yscrollcommand=queue_scroll.set)
+        queue_scroll.pack(side="right", fill="y")
+        self.queue_list.pack(side="left", fill="both", expand=True)
+        self.drop_hint = ttk.Label(queue_frame, textvariable=self.queue_var, foreground="#555555")
+        self.drop_hint.pack(fill="x", pady=(4, 0))
+        self.dnd_ready = False
+        if DND_AVAILABLE:
+            try:
+                self.queue_list.drop_target_register(DND_FILES)
+                self.queue_list.dnd_bind("<<Drop>>", self._on_drop)
+                self.dnd_ready = True
+            except tk.TclError:
+                self.dnd_ready = False
+
+        paths = ttk.LabelFrame(parent, padding=8)
+        paths.pack(fill="x")
+        self._t(paths, "u.section.paths", "text")
+        paths.columnconfigure(1, weight=1)
+        self.output_label = ttk.Label(paths)
         self._t(self.output_label, "u.output_label")
         self.output_label.grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Entry(self.paths_frame, textvariable=self.output_var).grid(
+        ttk.Entry(paths, textvariable=self.output_var).grid(
             row=0, column=1, sticky="ew", padx=6, pady=2
         )
-        self.output_button = ttk.Button(self.paths_frame, command=self._pick_output)
+        self.output_button = ttk.Button(paths, command=self._pick_output)
         self._t(self.output_button, "u.browse")
         self.output_button.grid(row=0, column=2, pady=2)
-        self.workflow_label = ttk.Label(self.paths_frame)
+        self.workflow_label = ttk.Label(paths)
         self._t(self.workflow_label, "u.workflow_label")
         self.workflow_label.grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Entry(self.paths_frame, textvariable=self.workflow_var).grid(
+        ttk.Entry(paths, textvariable=self.workflow_var).grid(
             row=1, column=1, sticky="ew", padx=6, pady=2
         )
-        self.workflow_button = ttk.Button(self.paths_frame, command=self._pick_workflow)
+        self.workflow_button = ttk.Button(paths, command=self._pick_workflow)
         self._t(self.workflow_button, "u.browse")
         self.workflow_button.grid(row=1, column=2, pady=2)
 
+        self.container_label = ttk.Label(paths)
+        self._t(self.container_label, "u.container")
+        self.container_label.grid(row=2, column=0, sticky="w", pady=2)
+        self.container_box = ttk.Combobox(
+            paths, state="readonly", width=10, values=list(CONTAINERS),
+            textvariable=self.container_var,
+        )
+        self.container_box.grid(row=2, column=1, sticky="w", padx=6, pady=2)
+        self.codec_box = ttk.Combobox(
+            paths, state="readonly", width=16, values=list(CODECS), textvariable=self.codec_var
+        )
+        self.codec_box.grid(row=2, column=1, sticky="w", padx=(120, 0), pady=2)
+        self.codec_label = ttk.Label(paths)
+        self._t(self.codec_label, "u.codec")
+        self.codec_label.grid(row=2, column=1, sticky="w", padx=(90, 0), pady=2)
+        self.format_hint = ttk.Label(paths, foreground="#555555")
+        self._t(self.format_hint, "u.format_hint")
+        self.format_hint.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+    def _build_settings_tab(self, parent: ttk.Frame) -> None:
+        header = ttk.Frame(parent)
+        header.pack(fill="x")
+        self.reload_button = ttk.Button(header, command=self._reload_settings_from_workflow)
+        self._t(self.reload_button, "u.reload_settings")
+        self.reload_button.pack(side="left")
+        self.advanced_check = ttk.Checkbutton(
+            header, variable=self.advanced_var, command=self._toggle_advanced
+        )
+        self._t(self.advanced_check, "u.advanced")
+        self.advanced_check.pack(side="left", padx=12)
+        self.settings_hint = ttk.Label(header, foreground="#555555")
+        self._t(self.settings_hint, "u.settings_hint")
+        self.settings_hint.pack(side="left")
+
+        body = ttk.Frame(parent)
+        body.pack(fill="both", expand=True, pady=6)
+        body.columnconfigure(1, weight=1)
+        for row, setting in enumerate(SETTINGS):
+            self.setting_widgets.extend(self._build_setting_row(body, setting, row))
+        self._toggle_advanced()
+
+    def _build_setting_row(self, parent: ttk.Frame, setting, row: int) -> list[tk.Widget]:
+        widgets: list[tk.Widget] = []
+        label = ttk.Label(parent, width=26, anchor="w")
+        self._t(label, setting.label_key)
+        label.grid(row=row, column=0, sticky="w", pady=3)
+        widgets.append(label)
+
+        if setting.kind == "bool":
+            var = tk.BooleanVar(value=bool(setting.default))
+            check = ttk.Checkbutton(
+                parent, variable=var, command=lambda name=setting.name: self._mark_dirty(name)
+            )
+            check.grid(row=row, column=1, sticky="w", pady=3)
+            widgets.append(check)
+        elif setting.kind == "combo":
+            options = list(setting.options)
+            var = tk.StringVar(value=str(setting.default))
+            box = ttk.Combobox(parent, state="readonly", values=options, textvariable=var, width=24)
+            box.grid(row=row, column=1, sticky="w", pady=3)
+            box.bind(
+                "<<ComboboxSelected>>",
+                lambda _event, name=setting.name: self._mark_dirty(name),
+            )
+            widgets.append(box)
+        else:
+            var = tk.DoubleVar(value=float(setting.default))
+            scale = ttk.Scale(
+                parent,
+                from_=float(setting.minimum or 0),
+                to=float(setting.maximum or 1),
+                variable=var,
+                orient="horizontal",
+                command=lambda _value, name=setting.name: self._mark_dirty(name),
+            )
+            scale.grid(row=row, column=1, sticky="ew", pady=3)
+            value_label = ttk.Label(parent, width=6)
+            value_label.grid(row=row, column=2, sticky="w", padx=6)
+            widgets.extend([scale, value_label])
+            var.trace_add(
+                "write",
+                lambda *_args, v=var, label=value_label: label.configure(
+                    text=f"{v.get():.2f}"
+                ),
+            )
+            value_label.configure(text=f"{var.get():.2f}")
+
+        hint = ttk.Label(parent, foreground="#555555")
+        self._t(hint, setting.hint_key)
+        hint.grid(row=row, column=3, sticky="w", padx=10, pady=3)
+        widgets.append(hint)
+        self.setting_vars[setting.name] = var
+        return widgets
+
+    def _toggle_advanced(self) -> None:
+        show = bool(self.advanced_var.get())
+        for setting in SETTINGS:
+            if not setting.advanced:
+                continue
+            for widget in self.setting_widgets:
+                if widget in self._advanced_widgets(setting):
+                    widget.grid() if show else widget.grid_remove()
+
+    def _advanced_widgets(self, setting) -> list[tk.Widget]:
+        found: list[tk.Widget] = []
+        for widget in self.setting_widgets:
+            with contextlib.suppress(tk.TclError):
+                if tr(setting.label_key) in str(widget.cget("text") or ""):
+                    found.append(widget)
+        return found
+
+    def _build_actions(self) -> None:
         actions = ttk.Frame(self.root)
-        actions.pack(fill="x", padx=10, pady=6)
+        actions.pack(fill="x", padx=10, pady=(0, 6))
         self.run_button = ttk.Button(actions, command=self._start)
         self._t(self.run_button, "u.run")
         self.run_button.pack(side="left")
@@ -157,6 +332,7 @@ class App:
         self._t(self.open_button, "u.open_output")
         self.open_button.pack(side="right")
 
+    def _build_progress_and_log(self) -> None:
         progress = ttk.LabelFrame(self.root, padding=8)
         progress.pack(fill="x", padx=10, pady=6)
         self._t(progress, "u.section.progress", "text")
@@ -168,7 +344,7 @@ class App:
         log_frame = ttk.LabelFrame(self.root, padding=8)
         log_frame.pack(fill="both", expand=True, padx=10, pady=(6, 10))
         self._t(log_frame, "u.section.log", "text")
-        self.log = tk.Text(log_frame, height=18, wrap="none", state="disabled")
+        self.log = tk.Text(log_frame, height=14, wrap="none", state="disabled")
         scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
         self.log.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -185,8 +361,8 @@ class App:
         self._fill_presets()
         self.output_var.set(str(self.config.processing.output or ""))
         self.workflow_var.set(str(self.config.workflow.path))
-        if self.settings.source:
-            self.source_var.set(self.settings.source)
+        self._load_queue()
+        self._reload_settings_from_workflow()
 
     def _fill_presets(self) -> None:
         for child in self.preset_row.winfo_children():
@@ -205,7 +381,7 @@ class App:
                 text=preset.label,
                 value=name,
                 variable=self.preset_var,
-                command=self._refresh_mode,
+                command=self._apply_preset,
             ).pack(side="left", padx=(0, 12))
         self._refresh_mode()
 
@@ -220,6 +396,73 @@ class App:
         if preset.settings:
             detail += " — " + ", ".join(f"{k}={v}" for k, v in sorted(preset.settings.items()))
         self.mode_var.set(tr("u.upscaling", mode=detail))
+
+    def _apply_preset(self) -> None:
+        """A preset is a recipe: it moves the sliders and the format boxes."""
+        preset = self.config.presets.get(self.preset_var.get()) if self.config else None
+        if preset is None:
+            return
+        if preset.upscaling_mode and "upscaling_mode" in self.setting_vars:
+            self.setting_vars["upscaling_mode"].set(preset.upscaling_mode)
+            self._mark_dirty("upscaling_mode")
+        for name, value in (preset.settings or {}).items():
+            if name in self.setting_vars:
+                self.setting_vars[name].set(value)
+                self._mark_dirty(name)
+        self._apply_preset_format(preset)
+        self._refresh_mode()
+
+    def _apply_preset_format(self, preset) -> None:
+        """The format boxes show canonical values, never the preset's raw YAML."""
+        if preset.container:
+            with contextlib.suppress(UsageError):
+                self.container_var.set(resolve_container(preset.container))
+        if preset.codec:
+            with contextlib.suppress(UsageError):
+                self.codec_var.set(resolve_codec(preset.codec))
+
+    def _mark_dirty(self, name: str) -> None:
+        if name not in self.setting_vars:
+            return
+        self.setting_dirty.add(name)
+
+    def _reload_settings_from_workflow(self) -> None:
+        """Fill the sliders with what the workflow really contains."""
+        defaults = {setting.name: setting.default for setting in SETTINGS}
+        values: dict = {}
+        path = self.workflow_var.get().strip()
+        if path and Path(path).is_file():
+            try:
+                workflow = load_workflow(path)
+                values = read_settings_values(
+                    workflow,
+                    self.config.workflow.settings_class_type if self.config else "DLSS5Settings",
+                    [setting.name for setting in SETTINGS],
+                )
+            except WorkflowError:
+                values = {}
+        for setting in SETTINGS:
+            var = self.setting_vars.get(setting.name)
+            if var is None:
+                continue
+            raw = values.get(setting.name, defaults[setting.name])
+            with contextlib.suppress(tk.TclError, ValueError):
+                if setting.kind == "bool":
+                    var.set(bool(raw))
+                elif setting.kind == "combo":
+                    var.set(str(raw))
+                else:
+                    var.set(float(raw))
+        self.setting_dirty.clear()
+
+    def _settings_overrides(self) -> dict:
+        return coerce_all(
+            {
+                name: self.setting_vars[name].get()
+                for name in self.setting_dirty
+                if name in self.setting_vars
+            }
+        )
 
     def _on_language(self, _event=None) -> None:
         label = self.language_var.get()
@@ -237,7 +480,10 @@ class App:
                     widget.configure(text=tr(key))
                 else:
                     widget.configure(**{attr: tr(key)})
+        self.tabs.tab(self._files_tab, text=tr("u.tab.files"))
+        self.tabs.tab(self._settings_tab, text=tr("u.tab.settings"))
         self._fill_presets()
+        self._refresh_queue_hint()
         if self.config is not None:
             self.status_var.set(tr("u.ready"))
 
@@ -246,16 +492,80 @@ class App:
         self.settings.output_dir = store_path(self.output_var.get().strip(), TOOL_ROOT) or None
         self.settings.workflow = store_path(self.workflow_var.get().strip(), TOOL_ROOT) or None
         self.settings.preset = self.preset_var.get() or None
-        source = self.source_var.get().strip()
-        self.settings.source = source or None
+        self.settings.container = self.container_var.get() or None
+        self.settings.codec = self.codec_var.get() or None
+        self.settings.sources = [
+            store_path(str(path), TOOL_ROOT) or str(path) for path in self.queue
+        ]
+        self.settings.settings = dict(self._settings_overrides())
         saved = save_settings(self.settings, path=self.state_path, app_root=TOOL_ROOT)
         if saved is not None:
             self.settings_file = saved
 
-    def _pick_file(self) -> None:
+    # queue -----------------------------------------------------------------
+    def _load_queue(self) -> None:
+        restored = [resolve_path(item, TOOL_ROOT) for item in self.settings.sources]
+        self.queue = [path for path in restored if path is not None]
+        self._refresh_queue()
+
+    def _add_paths(self, paths) -> None:
+        added = 0
+        for raw in paths:
+            path = Path(str(raw))
+            if not path.exists():
+                self._append(tr("u.queue_missing", path=path), "WARNING")
+                continue
+            if any(existing == path for existing in self.queue):
+                continue
+            self.queue.append(path)
+            added += 1
+        if added:
+            self._refresh_queue()
+            self._save_state()
+
+    def _refresh_queue(self) -> None:
+        self.queue_list.delete(0, "end")
+        for path in self.queue:
+            self.queue_list.insert("end", str(path))
+        self._refresh_queue_hint()
+
+    def _refresh_queue_hint(self) -> None:
+        if self.queue:
+            self.queue_var.set(tr("u.queue_count", count=len(self.queue)))
+        elif self.dnd_ready:
+            self.queue_var.set(tr("u.queue_drop"))
+        else:
+            self.queue_var.set(tr("u.queue_empty"))
+
+    def _on_drop(self, event) -> None:
+        """tkdnd hands over a Tcl list; a plain path is accepted too."""
+        raw = event.data
+        try:
+            paths = list(self.root.tk.splitlist(raw))
+        except tk.TclError:
+            paths = []
+        if not any(Path(str(item)).exists() for item in paths):
+            candidate = Path(str(raw).strip().strip('{}'))
+            if candidate.exists():
+                paths = [str(candidate)]
+        self._add_paths(paths)
+
+    def _remove_selected(self) -> None:
+        for index in sorted(self.queue_list.curselection(), reverse=True):
+            del self.queue[index]
+        self._refresh_queue()
+        self._save_state()
+
+    def _clear_queue(self) -> None:
+        self.queue = []
+        self._refresh_queue()
+        self._save_state()
+
+    # pickers ---------------------------------------------------------------
+    def _pick_files(self) -> None:
         extensions = self.config.processing.extensions if self.config else ("mp4",)
         pattern = " ".join(f"*.{ext}" for ext in extensions)
-        chosen = filedialog.askopenfilename(
+        chosen = filedialog.askopenfilenames(
             title=tr("u.title.pick_file"),
             filetypes=[
                 (tr("u.filetypes.videos"), pattern),
@@ -263,12 +573,12 @@ class App:
             ],
         )
         if chosen:
-            self.source_var.set(chosen)
+            self._add_paths(chosen)
 
     def _pick_folder(self) -> None:
         chosen = filedialog.askdirectory(title=tr("u.title.pick_folder"))
         if chosen:
-            self.source_var.set(chosen)
+            self._add_paths([chosen])
 
     def _pick_output(self) -> None:
         chosen = filedialog.askdirectory(title=tr("u.title.pick_output"))
@@ -282,19 +592,20 @@ class App:
         )
         if chosen:
             self.workflow_var.set(chosen)
+            self._reload_settings_from_workflow()
 
     def _open_output(self) -> None:
         if self.output_dir and Path(self.output_dir).is_dir():
             os.startfile(str(self.output_dir))
 
+    # running ---------------------------------------------------------------
     def _check(self) -> None:
         self._start(check_only=True)
 
     def _start(self, check_only: bool = False) -> None:
         if self.worker is not None and self.worker.is_alive():
             return
-        source = self.source_var.get().strip()
-        if not source:
+        if not self.queue:
             messagebox.showwarning(tr("u.dlg.source_title"), tr("u.dlg.source_msg"))
             return
         output = self.output_var.get().strip()
@@ -308,6 +619,18 @@ class App:
         if not Path(workflow).is_file():
             messagebox.showerror(tr("u.dlg.workflow_title"), missing_workflow_message(workflow))
             return
+        try:
+            validate(self._settings_overrides())
+        except UsageError as exc:
+            messagebox.showerror(tr("u.dlg.settings_title"), str(exc))
+            return
+        try:
+            from .mappings import validate_codec_container
+
+            validate_codec_container(self.codec_var.get(), self.container_var.get())
+        except UsageError as exc:
+            messagebox.showerror(tr("u.dlg.format_title"), str(exc))
+            return
 
         self._save_state()
         self._set_running(True)
@@ -315,50 +638,49 @@ class App:
         self.status_var.set(tr("u.verifying"))
         self.bar.configure(value=0)
         self.output_dir = Path(output)
+        job = {
+            "paths": list(self.queue),
+            "output": output,
+            "workflow": workflow,
+            "container": self.container_var.get(),
+            "codec": self.codec_var.get(),
+            "preset": self.preset_var.get(),
+            "settings": self._settings_overrides(),
+            "check_only": check_only,
+        }
         self.worker = threading.Thread(
             target=self._work,
-            args=(
-                source,
-                output,
-                workflow,
-                self.preset_var.get(),
-                check_only,
-                self.force_var.get(),
-            ),
+            args=(job,),
             name="dlss5-gui",
             daemon=True,
         )
         self.worker.start()
 
-    def _work(
-        self,
-        source: str,
-        output: str,
-        workflow: str,
-        preset: str,
-        check_only: bool,
-        force: bool,
-    ) -> None:
+    def _work(self, job: dict) -> None:
+        """Runs off the main thread: only plain values, never a Tk widget."""
         sink = self.sink
+        check_only = bool(job["check_only"])
         try:
             overrides: dict = {
-                "processing": {"output": output},
-                "run": {"preset": preset or None},
+                "processing": {
+                    "output": job["output"],
+                    "container": job["container"],
+                    "codec": job["codec"],
+                },
+                "run": {"preset": job["preset"] or None},
             }
-            if workflow:
-                overrides["workflow"] = {"path": workflow}
+            if job["workflow"]:
+                overrides["workflow"] = {"path": job["workflow"]}
+            if job["settings"]:
+                overrides["dlss5_settings"] = dict(job["settings"])
             config = load_config(
-                path=self.config_path,
-                overrides=overrides,
-                settings=self.settings,
+                path=self.config_path, overrides=overrides, settings=self.settings
             )
-            is_folder = Path(source).is_dir()
-            sources, folder_mode = resolve_sources(
-                input_path=None if is_folder else source,
-                folder=source if is_folder else None,
-                extensions=config.processing.extensions,
-                warn=lambda message: sink.line(message),
-            )
+            sources, problems = resolve_many(job["paths"], config.processing.extensions)
+            for problem in problems:
+                sink.line(problem)
+            if not sources:
+                raise UsageError(tr("u.dlg.source_msg"))
             logger, log_path = setup_logging(
                 config.log_dir, level=config.log_level, queue=self.messages
             )
@@ -373,10 +695,13 @@ class App:
                     )
                 )
             orchestrator = Orchestrator(
-                config=config, logger=logger, sink=sink, force=force, check_only=check_only
+                config=config, logger=logger, sink=sink, check_only=check_only
             )
             self.orchestrator = orchestrator
-            code = orchestrator.run(sources, folder_mode)
+            code = orchestrator.run(sources, folder_mode=len(sources) > 1)
+            if getattr(orchestrator.server, "port", None) not in (None, config.comfy.port):
+                self.settings.comfy_port = int(orchestrator.server.port)
+                save_settings(self.settings, path=self.state_path, app_root=TOOL_ROOT)
         except (UsageError, WorkflowError) as exc:
             self.messages.put((LOG, ("ERROR", tr("u.error", error=exc))))
             code = 2
@@ -451,6 +776,12 @@ class App:
         if self.output_dir is not None:
             self.open_button.configure(state="normal")
 
+    def _open_setup(self) -> None:
+        if self.setup_dialog is not None:
+            self.setup_dialog.window.lift()
+            return
+        self.setup_dialog = SetupDialog(self.root, self)
+
     def _maybe_first_run_setup(self) -> None:
         """Open the setup screen when something is missing on this machine."""
         if self.config is None:
@@ -458,12 +789,6 @@ class App:
         checks = doctor.run_checks(self.config)
         if not all(check.ok for check in checks):
             self._open_setup()
-
-    def _open_setup(self) -> None:
-        if self.setup_dialog is not None:
-            self.setup_dialog.window.lift()
-            return
-        self.setup_dialog = SetupDialog(self.root, self)
 
     def _on_close(self) -> None:
         if self.worker is not None and self.worker.is_alive():
@@ -483,7 +808,7 @@ class SetupDialog:
         self.window = tk.Toplevel(parent)
         self.window.title(tr("u.setup_button"))
         self.window.protocol("WM_DELETE_WINDOW", self.close)
-        self.window.geometry("820x560")
+        self.window.geometry("860x600")
         self.window.transient(parent)
         self.accept_var = tk.BooleanVar(value=False)
         self.comfy_var = tk.StringVar(value="")
@@ -592,8 +917,16 @@ class SetupDialog:
         self.refresh()
 
 
+def make_root() -> tk.Tk:
+    """A Tk root that knows about drag and drop when the module is present."""
+    if DND_AVAILABLE:
+        with contextlib.suppress(tk.TclError):
+            return TkinterDnD.Tk()
+    return tk.Tk()
+
+
 def launch(config_path: str | Path | None = None, state_path: str | Path | None = None) -> int:
-    root = tk.Tk()
+    root = make_root()
     with contextlib.suppress(tk.TclError):
         root.call("tk", "scaling", 1.25)
     app = App(root, config_path, state_path)

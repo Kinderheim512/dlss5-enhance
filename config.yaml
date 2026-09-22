@@ -35,6 +35,28 @@ presets:
     quality: Best
     codec: h265
     container: mkv
+  x2_plus:
+    label: Upscale x2 + Enhance
+    upscaling_mode: 2x (Performance)
+    quality: Best
+    codec: h265
+    container: mkv
+    settings:
+      local_structure_strength: 2.0
+      skin_structure_strength: 2.0
+      automatic_mask: true
+      dlss_model_preset: M
+  x3_plus:
+    label: Upscale x3 + Enhance
+    upscaling_mode: 3x (Ultra Performance)
+    quality: Best
+    codec: h265
+    container: mkv
+    settings:
+      local_structure_strength: 2.0
+      skin_structure_strength: 2.0
+      automatic_mask: true
+      dlss_model_preset: M
 
 comfy:
   root:                      # empty = detected on first run (or --comfy-root)

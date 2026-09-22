@@ -190,11 +190,11 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "v.tunnel_detected": (
         "Port {port} is forwarded by an SSH tunnel ({name}, PID {pid}) to a remote ComfyUI, "
-        "not a local one. The DLSS5 node has to run locally (D3D12 worker). Stop the tunnel "
-        "or change comfy.port.",
+        "not a local one: the DLSS5 node has to run locally (D3D12 worker). A local ComfyUI "
+        "will be started on another port.",
         "Le port {port} est forwardé par un tunnel SSH ({name}, PID {pid}) vers un ComfyUI "
-        "distant, pas un ComfyUI local. Le node DLSS5 doit tourner en local (worker D3D12). "
-        "Arrêter le tunnel ou changer comfy.port.",
+        "distant, pas un ComfyUI local : le node DLSS5 doit tourner en local (worker D3D12). "
+        "Un ComfyUI local sera démarré sur un autre port.",
     ),
     "v.reuse": (
         "ComfyUI already listening on {url} — {owner}. Reusing it.",
@@ -206,13 +206,38 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "L'app ComfyUI Desktop ({name}) tourne : la file d'attente est partagée et fermer "
         "l'app arrêtera le serveur en cours de traitement.",
     ),
-    "v.port_busy": (
-        "Port {port} is held by {name} (PID {pid}), which does not answer like a ComfyUI "
-        "server. Free the port or change comfy.port.",
-        "Le port {port} est occupé par {name} (PID {pid}), qui ne répond pas comme un serveur "
-        "ComfyUI. Libérez le port ou changez comfy.port.",
+    "v.found_local": (
+        "Found a local ComfyUI on port {port} with the DLSS5 node loaded — reusing it "
+        "({url}).",
+        "ComfyUI local trouvé sur le port {port} avec le node DLSS5 chargé — réutilisation "
+        "({url}).",
     ),
-    "v.other_process": ("another process", "un autre process"),
+    "v.fallback_port": (
+        "Port {configured} cannot host a local ComfyUI (tunnel or other process); starting "
+        "one on port {port} instead.",
+        "Le port {configured} ne peut pas héberger un ComfyUI local (tunnel ou autre "
+        "process) ; démarrage sur le port {port} à la place.",
+    ),
+    "v.no_free_port": (
+        "No free port among {ports}: another process holds them all.",
+        "Aucun port libre parmi {ports} : un autre process les occupe tous.",
+    ),
+    "v.shared_warning": (
+        "That server is shared: your job queues behind its own, and the DLSS5 worker needs "
+        "the GPU exclusively — a render already running there can make this one fail.",
+        "Ce serveur est partagé : ton job passe derrière les siens, et le worker DLSS5 a "
+        "besoin de la GPU en exclusivité — un rendu en cours peut faire échouer le tien.",
+    ),
+    "v.node_missing_server": (
+        "The ComfyUI on {url} does not have the DLSS5 node loaded (check {path}).",
+        "Le ComfyUI sur {url} n\'a pas le node DLSS5 chargé (vérifier {path}).",
+    ),
+    "v.node_not_installed": (
+        "The DLSS5 node pack is not installed in {path}. Run --setup (or the Setup… "
+        "button) to fetch it.",
+        "Le pack de nodes DLSS5 n\'est pas installé dans {path}. Lancer --setup (ou le "
+        "bouton Installation…) pour le récupérer.",
+    ),
     "v.no_autostart": (
         "No ComfyUI server on {url} and --no-autostart is set.",
         "Aucun serveur ComfyUI sur {url} et --no-autostart est actif.",
@@ -477,6 +502,86 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "j.encoder_ok": ("OK", "OK"),
     "j.encoder_unavailable": ("UNAVAILABLE", "INDISPONIBLE"),
+    "d.set.upscaling_mode.label": ("Upscaling", "Upscaling"),
+    "d.set.upscaling_mode.hint": (
+        "1x cleans the render at its own resolution; the other modes also upscale.",
+        "1x nettoie le rendu à sa résolution ; les autres modes agrandissent aussi.",
+    ),
+    "d.set.dlss_model_preset.label": ("DLSS model", "Modèle DLSS"),
+    "d.set.dlss_model_preset.hint": (
+        "The most important setting: L and M rebuild much more skin and hair than Default/J/K.",
+        "Le réglage le plus important : L et M reconstruisent bien plus de peau et de cheveux.",
+    ),
+    "d.set.local_structure_strength.label": ("Local structure", "Structure locale"),
+    "d.set.local_structure_strength.hint": (
+        "Local detail and structure reconstruction (0 to 2).",
+        "Reconstruction du détail et de la structure locaux (0 à 2).",
+    ),
+    "d.set.skin_structure_strength.label": ("Skin detail", "Détail de peau"),
+    "d.set.skin_structure_strength.hint": (
+        "Pores and skin texture. Only active while automatic mask is on.",
+        "Pores et texture de peau. Actif seulement si le masque automatique est actif.",
+    ),
+    "d.set.automatic_mask.label": ("Automatic skin mask", "Masque de peau automatique"),
+    "d.set.automatic_mask.hint": (
+        "Lets the model find the regions it treats as skin; unlocks skin detail.",
+        "Laisse le modèle détecter les zones de peau ; débloque le détail de peau.",
+    ),
+    "d.set.nr_intensity.label": ("Neural intensity", "Intensité neurale"),
+    "d.set.nr_intensity.hint": (
+        "Strength of the neural pass. Clamped at 1.0; below that it blends back to the source.",
+        "Force du passage neural. Plafonné à 1.0 ; en dessous, ça re-mélange vers la source.",
+    ),
+    "d.set.local_tone_strength.label": ("Local tone", "Tone local"),
+    "d.set.local_tone_strength.hint": ("Local tone mapping.", "Tone mapping local."),
+    "d.set.nr_style.label": ("Look", "Look"),
+    "d.set.nr_style.hint": (
+        "Cinematic deepens shadows, Natural softens: it changes the look, not the amount.",
+        "Cinematic creuse les ombres, Natural adoucit : ça change le look, pas la quantité.",
+    ),
+    "d.set.motion.label": ("Motion vectors", "Vecteurs de mouvement"),
+    "d.set.motion.hint": (
+        "auto skips them for a single image; optical_flow estimates them from the footage.",
+        "auto les ignore sur une image seule ; optical_flow les estime depuis la vidéo.",
+    ),
+    "d.set.scene_change_threshold.label": ("Scene cut threshold", "Seuil de changement de scène"),
+    "d.set.scene_change_threshold.hint": (
+        "Mean luminance change above which the temporal history resets.",
+        "Variation moyenne de luminance au-delà de laquelle l'historique repart de zéro.",
+    ),
+    "d.set.warmup_frames.label": ("Warm-up frames", "Images de chauffe"),
+    "d.set.warmup_frames.hint": (
+        "Extra frames rendered before the first output settles (0 to 16).",
+        "Images supplémentaires rendues avant que la sortie se stabilise (0 à 16).",
+    ),
+    "d.set.unknown": (
+        "Unknown DLSS5 setting {name!r}. Known settings: {known}.",
+        "Réglage DLSS5 inconnu {name!r}. Réglages connus : {known}.",
+    ),
+    "d.set.bad_option": (
+        "{name}: {value!r} is not one of {options}.",
+        "{name} : {value!r} ne fait pas partie de {options}.",
+    ),
+    "d.set.too_low": (
+        "{name}: {value} is below the minimum ({minimum}).",
+        "{name} : {value} est sous le minimum ({minimum}).",
+    ),
+    "d.set.too_high": (
+        "{name}: {value} is above the maximum ({maximum}).",
+        "{name} : {value} est au-dessus du maximum ({maximum}).",
+    ),
+    "d.set.skin_needs_mask": (
+        "Skin detail only works with the automatic mask on: drop --no-mask or the skin value.",
+        "Le détail de peau n'agit qu'avec le masque automatique : retirez --no-mask ou la valeur de peau.",
+    ),
+    "j.plan_settings_applied": (
+        "  DLSS5 settings    : {settings}",
+        "  réglages DLSS5    : {settings}",
+    ),
+    "j.plan_settings_none": (
+        "(the workflow's own values)",
+        "(les valeurs du workflow)",
+    ),
     # doctor / setup
     "d.header": ("Installation check:", "Vérification de l'installation :"),
     "d.gpu": ("NVIDIA GPU and driver", "GPU NVIDIA et pilote"),
@@ -579,16 +684,37 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "Runtime not installed: re-run --setup and accept the notice (or pass --runtime-dir).",
         "Runtime non installé : relancer --setup et accepter l'avis (ou passer --runtime-dir).",
     ),
+    "u.tab.files": ("Files", "Fichiers"),
+    "u.tab.settings": ("DLSS5 settings", "Réglages DLSS5"),
+    "u.section.queue": ("Files to process", "Fichiers à traiter"),
+    "u.add_files": ("Add files…", "Ajouter des fichiers…"),
+    "u.add_folder": ("Add a folder…", "Ajouter un dossier…"),
+    "u.remove": ("Remove", "Retirer"),
+    "u.clear": ("Clear all", "Tout vider"),
+    "u.queue_drop": ("Drag and drop files or folders here", "Glissez-déposez des fichiers ou des dossiers ici"),
+    "u.queue_empty": ("No file queued", "Aucun fichier en attente"),
+    "u.queue_count": ("{count} item(s) queued — one render at a time", "{count} élément(s) en attente — un rendu à la fois"),
+    "u.queue_missing": ("{path} does not exist any more", "{path} n'existe plus"),
+    "u.container": ("Container", "Conteneur"),
+    "u.codec": ("Codec", "Codec"),
+    "u.format_hint": (
+        "MKV keeps the audio as it is; MP4 and MOV re-encode it to AAC and drop subtitles.",
+        "MKV conserve l'audio tel quel ; MP4 et MOV le ré-encodent en AAC et perdent les sous-titres.",
+    ),
+    "u.reload_settings": ("Read the workflow again", "Relire le workflow"),
+    "u.advanced": ("Advanced", "Avancé"),
+    "u.settings_hint": (
+        "Only the sliders you touch are written; the rest follows your workflow.",
+        "Seuls les curseurs que tu bouges sont écrits ; le reste suit ton workflow.",
+    ),
+    "u.dlg.settings_title": ("DLSS5 settings", "Réglages DLSS5"),
+    "u.dlg.format_title": ("Output format", "Format de sortie"),
     # gui
     "u.title": ("DLSS5 Enhance {version}", "DLSS5 Enhance {version}"),
     "u.section.preset": ("Preset", "Preset"),
-    "u.section.source": ("Source", "Source"),
     "u.section.paths": ("Output and workflow", "Sortie et workflow"),
     "u.section.progress": ("Progress", "Progression"),
     "u.section.log": ("Log", "Journal"),
-    "u.pick_file": ("Choose a file…", "Choisir un fichier…"),
-    "u.pick_folder": ("Choose a folder…", "Choisir un dossier…"),
-    "u.no_source": ("(no source)", "(aucune source)"),
     "u.output_label": ("Output", "Sortie"),
     "u.workflow_label": ("Workflow", "Workflow"),
     "u.browse": ("Browse…", "Parcourir…"),

@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec: one file, console subsystem, GUI hides the console itself."""
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
+datas = collect_data_files("tkinterdnd2") + [("dlss5-enhance.ico", ".")]
+binaries = collect_dynamic_libs("tkinterdnd2")
+
 a = Analysis(
     ["dlss5_entry.py"],
     pathex=["."],
-    binaries=[],
-    datas=[],
-    hiddenimports=["websocket"],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=["websocket", "tkinterdnd2"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -33,6 +38,7 @@ exe = EXE(
     a.datas,
     [],
     name="DLSS5-Enhance",
+    icon="dlss5-enhance.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

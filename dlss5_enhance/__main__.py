@@ -19,7 +19,7 @@ from .logging_setup import ProgressLine, setup_logging
 from .mappings import normalize_extensions
 from .presets import describe_presets
 from .runner import Orchestrator
-from .settings_store import load_settings
+from .settings_store import load_settings, save_settings
 from .sink import ConsoleSink
 from .sources import resolve_sources
 
@@ -59,6 +59,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", help="output folder (default: your Downloads folder)")
     parser.add_argument("--quality", help="draft|low, normal|medium, high, max")
+    parser.add_argument("--upscale", help="1x|1.5x|1.724x|2x|3x (or a factor)")
+    parser.add_argument("--model-preset", dest="model_preset", help="Default, J, K, L, M")
+    parser.add_argument("--structure", type=float, help="local structure strength (0 to 2)")
+    parser.add_argument("--skin", type=float, help="skin detail strength (-1 to 2)")
+    parser.add_argument(
+        "--mask",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="automatic skin mask",
+    )
+    parser.add_argument("--intensity", type=float, help="neural intensity (0 to 2)")
+    parser.add_argument("--tone", type=float, help="local tone strength (0 to 2)")
+    parser.add_argument("--nr-style", dest="nr_style", help="Default, Natural, Cinematic")
+    parser.add_argument("--motion", help="auto, optical_flow, none")
+    parser.add_argument(
+        "--scene-threshold", dest="scene_threshold", type=float, help="0.01 to 1.0"
+    )
+    parser.add_argument(
+        "--warmup-frames", dest="warmup_frames", type=int, help="0 to 16"
+    )
+    parser.add_argument(
+        "--enhance-strong",
+        action="store_true",
+        dest="enhance_strong",
+        help="push structure, skin and the DLSS model preset on top of the chosen preset",
+    )
     parser.add_argument("--codec", help="h264, h265|hevc, av1, prores")
     parser.add_argument("--container", help="mp4, mkv, mov")
     parser.add_argument(
@@ -121,6 +147,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--comfy-root", dest="comfy_root", help="path to an existing ComfyUI")
     parser.add_argument(
+        "--port", type=int, help="ComfyUI port to use (disables the fallback)"
+    )
+    parser.add_argument(
         "--download-comfyui",
         action="store_true",
         dest="download_comfyui",
@@ -156,6 +185,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _node_settings_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    """The DLSS5 Settings values asked for on the command line."""
+    from .dlss5_settings import STRONG
+    from .presets import normalize_upscaling
+
+    values: dict[str, Any] = dict(STRONG) if args.enhance_strong else {}
+    explicit = {
+        "dlss_model_preset": args.model_preset,
+        "local_structure_strength": args.structure,
+        "skin_structure_strength": args.skin,
+        "automatic_mask": args.mask,
+        "nr_intensity": args.intensity,
+        "local_tone_strength": args.tone,
+        "nr_style": args.nr_style,
+        "motion": args.motion,
+        "scene_change_threshold": args.scene_threshold,
+        "warmup_frames": args.warmup_frames,
+    }
+    if args.upscale:
+        explicit["upscaling_mode"] = normalize_upscaling(args.upscale)
+    for name, value in explicit.items():
+        if value is not None:
+            values[name] = value
+    return values
+
+
 def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     output = str(Path(args.output).expanduser().resolve()) if args.output else None
     workflow = str(Path(args.workflow).expanduser().resolve()) if args.workflow else None
@@ -182,8 +237,13 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
     if workflow:
         overrides["workflow"] = {"path": workflow}
+    node_settings = _node_settings_from_args(args)
+    if node_settings:
+        overrides["dlss5_settings"] = node_settings
     if args.lang:
         overrides["language"] = args.lang
+    if args.port:
+        overrides["comfy"] = {"port": args.port, "port_fallback": [args.port]}
     return overrides
 
 
@@ -203,6 +263,15 @@ def _configure_streams() -> None:
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(AttributeError, ValueError):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _remember_port(orchestrator, config, settings, settings_path) -> None:
+    """Remember a fallback port so the next run reuses that server."""
+    port = getattr(orchestrator.server, "port", None)
+    if port is None or port == config.comfy.port:
+        return
+    settings.comfy_port = int(port)
+    save_settings(settings, path=settings_path, app_root=TOOL_ROOT)
 
 
 def run_cli(argv: Sequence[str]) -> int:
@@ -283,7 +352,9 @@ def run_cli(argv: Sequence[str]) -> int:
         check_only=args.check,
     )
     try:
-        return orchestrator.run(sources, folder_mode)
+        code = orchestrator.run(sources, folder_mode)
+        _remember_port(orchestrator, config, settings, settings_path)
+        return code
     except UsageError as exc:
         sink.clear()
         logger.error("%s", exc)

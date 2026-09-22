@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import UsageError
+from .spawn import run_hidden
 
-CREATE_NO_WINDOW = 0x08000000
 MAX_LONG_EDGE = 7680
 MAX_SHORT_EDGE = 4320
 
@@ -33,15 +33,7 @@ class VideoInfo:
 
 
 def _run(command: list[str], timeout: float) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        creationflags=CREATE_NO_WINDOW,
-    )
+    return run_hidden(command, timeout=timeout)
 
 
 def probe_video(ffprobe: Path, source: Path, timeout: float = 60.0) -> VideoInfo:

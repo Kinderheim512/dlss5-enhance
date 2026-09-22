@@ -175,7 +175,7 @@ class Orchestrator:
         preset = self.preset
         if preset is None:
             return
-        values = preset.settings_values(self.config.workflow.settings_upscaling_input)
+        values = self._settings_values()
         if not values:
             return
         class_type = self.config.workflow.settings_class_type
@@ -195,10 +195,16 @@ class Orchestrator:
             )
 
     def _settings_values(self) -> dict | None:
-        """The DLSS5 Settings inputs this run must override (upscaling included)."""
-        if self.preset is None:
-            return None
-        values = self.preset.settings_values(self.config.workflow.settings_upscaling_input)
+        """The DLSS5 Settings inputs this run must override.
+
+        Preset first, then the explicit settings (CLI or config), which win.
+        """
+        values: dict = {}
+        if self.preset is not None:
+            values.update(
+                self.preset.settings_values(self.config.workflow.settings_upscaling_input)
+            )
+        values.update(self.config.settings_overrides)
         return values or None
 
     def _effective_factor(self) -> float:
@@ -325,6 +331,17 @@ class Orchestrator:
         )
         self.sink.line(tr("j.plan_output", path=self.output_dir))
         self.sink.line(tr("j.plan_encoders", table=self._encoder_report(width, height)))
+        applied = self._settings_values() or {}
+        self.sink.line(
+            tr(
+                "j.plan_settings_applied",
+                settings=(
+                    ", ".join(f"{k}={v}" for k, v in sorted(applied.items()))
+                    if applied
+                    else tr("j.plan_settings_none")
+                ),
+            )
+        )
         self.sink.line(tr("j.plan_files", count=len(sources)))
         ffprobe = self.config.comfy.ffprobe
         for source in sources:
@@ -491,7 +508,7 @@ class Orchestrator:
 
         monitor = JobMonitor(
             self.client,
-            self.config.comfy.ws_url,
+            self.server.ws_url,
             prompt_id,
             client_id,
             self.target_id,

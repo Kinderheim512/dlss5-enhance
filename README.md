@@ -44,8 +44,9 @@ downloaded on the first run, from its own project.
      downloading it (about 467 MB) — nothing is downloaded before you accept;
    - it ends with a **self test**: a one-second clip is rendered, which proves
      the whole chain works.
-4. Pick a preset, pick your video (or a folder), pick the output folder, press
-   **Run**.
+4. Add your videos to the **queue** (the *Add files…* / *Add a folder…* buttons,
+   or just **drag and drop** them on the list), pick a preset, pick the output
+   folder, press **Run**. The queue is remembered between sessions.
 
 The first render starts ComfyUI, which takes about 30 seconds; the next ones
 reuse it.
@@ -59,6 +60,8 @@ reuse it.
 | `x15` — *Upscale x1.5* | `1.5x (Quality)` | |
 | `x2` — *Upscale x2* | `2x (Performance)` | |
 | `x3` — *Upscale x3* | `3x (Ultra Performance)` | |
+| `x2_plus` — *Upscale x2 + Enhance* | `2x (Performance)` | upscaling **and** a stronger enhancement pass |
+| `x3_plus` — *Upscale x3 + Enhance* | `3x (Ultra Performance)` | same, at 3x |
 
 All five encode in HEVC/MKV at quality *Best*, and all of them are just entries
 in `config.yaml`:
@@ -79,9 +82,62 @@ A preset writes its upscaling mode into the `DLSS5Settings` node of your
 workflow and leaves everything else alone: your model preset, style, masking and
 strength settings are respected.
 
+A preset is only a recipe: picking one **moves the sliders and the format boxes**
+of the *DLSS5 settings* tab, and you can then adjust everything by hand.
+**Only what you touch is written** into the workflow — the rest of your JSON is
+left exactly as you exported it. The *Read the workflow again* button puts the
+controls back on the values your workflow really contains.
+
 **There is no 4x.** The node offers exactly `1x`, `1.5x`, `1.724x`, `2x`, `3x`.
 The tool warns you before submitting when the geometry you ask for is beyond the
 node's limits (long edge 7680, short edge 4320).
+
+## DLSS5 settings
+
+The *DLSS5 settings* tab drives the node's own controls. Everything below is
+also available on the command line, and a value out of range (or an impossible
+combination) is refused **before** anything is submitted.
+
+| Setting | Range (default) | What it really does |
+|---|---|---|
+| `upscaling_mode` | 1x DLAA · 1.5x · 1.724x · 2x · 3x (**1x**) | 1x cleans the render at its own resolution; the others clean **and** upscale |
+| `dlss_model_preset` | Default / J / K / L / M (**M**) | the most important one: L and M rebuild markedly more skin and hair than Default/J/K |
+| `local_structure_strength` | 0–2 (**1.5**) | local detail and structure reconstruction |
+| `skin_structure_strength` | −1–2 (**2.0**) | pores and skin texture — only active while the mask is on |
+| `automatic_mask` | on/off (**on**) | lets the model find what it treats as skin; unlocks the setting above |
+| `nr_intensity` | 0–2 (**1.0**) | strength of the neural pass; clamped at 1.0, below it blends back to the source |
+| `local_tone_strength` | 0–2 (**1.0**) | local tone mapping |
+| `nr_style` | Default / Natural / Cinematic (**Default**) | Cinematic deepens shadows, Natural softens: it changes the look, not the amount |
+| `motion` | auto / optical_flow / none (**auto**) | motion vectors for temporal accumulation (advanced) |
+| `scene_change_threshold` | 0.01–1 (**0.24**) | luminance change above which the temporal history resets (advanced) |
+| `warmup_frames` | 0–16 (**0**) | extra frames rendered before the first output settles (advanced) |
+| `runtime_dir` | path (empty) | where the native runtime lives (advanced, set by the setup) |
+| `nr_preset` | Default / #1–#3 (**Default**) | **inert** on current builds (bit-identical output) — not exposed |
+
+`--enhance-strong` (or the same values written by hand) pushes structure, skin,
+the mask and the model preset in one go — that is what `x2_plus` and `x3_plus`
+are made of.
+
+## Files and queue
+
+- The queue takes **files and folders**. A folder is expanded to the video files
+  it contains, in the order you added it; duplicates are ignored.
+- **Drag and drop** works from Explorer (files or folders). If the optional
+  `tkinterdnd2` module is missing, the buttons still work.
+- A path that disappeared is reported when you drop it, and the whole queue is
+  re-checked before a run: nothing is silently skipped.
+- The batch runs **one file at a time** — the GPU is given to the DLSS5 worker.
+
+## Output format
+
+| | Choices | Notes |
+|---|---|---|
+| Container | **MKV**, **MP4**, **MOV** | there is no WebM output: the node writes only these three |
+| Codec | **H.264**, **HEVC**, **AV1**, **ProRes Proxy** | AV1 needs an RTX 40+; ProRes needs MOV or MKV |
+| Audio | — | MKV keeps the audio as it is (Opus, AAC, Vorbis…); MP4 and MOV re-encode to AAC 192 kbit/s and drop subtitles |
+
+The extension of the result follows the container: a `.webm` source comes out as
+`.mkv` unless you ask for something else.
 
 ## Command line
 
@@ -100,6 +156,19 @@ DLSS5-Enhance.exe --cli --lang fr --preset x3 video.mp4
 |---|---|
 | `<file>` or `--folder <dir>` | exactly one source |
 | `--preset <name>` | preset from `config.yaml` |
+| `--upscale <mode>` | 1x, 1.5x, 1.724x, 2x, 3x (or a bare factor) |
+| `--model-preset <P>` | Default, J, K, L, M |
+| `--structure <n>` | local structure strength (0 to 2) |
+| `--skin <n>` | skin detail (−1 to 2, needs the mask) |
+| `--mask` / `--no-mask` | automatic skin mask |
+| `--intensity <n>` | neural intensity (0 to 2) |
+| `--tone <n>` | local tone strength (0 to 2) |
+| `--nr-style <S>` | Default, Natural, Cinematic |
+| `--motion <M>` | auto, optical_flow, none |
+| `--scene-threshold <n>` | 0.01 to 1.0 |
+| `--warmup-frames <n>` | 0 to 16 |
+| `--enhance-strong` | push structure, skin, mask and model preset on top of the preset |
+| `--port <n>` | ComfyUI port (disables the fallback) |
 | `--list-presets` | list the presets and exit |
 | `--output <dir>` | output folder (default: your Downloads folder) |
 | `--quality` | `draft`\|`low` → Auto, `normal`\|`medium` → Good, `high` → Best, `max` → Max |
@@ -180,9 +249,16 @@ exceeds its maximum), the tool says so and the node encodes in software.
   or a remote shell has no usable desktop.
 - The GPU is given to the worker: do not game or start a second render in
   parallel. A leftover worker (`nvngx.dll`) is reported in the log after a crash.
-- If the configured port is held by an **SSH tunnel** to a remote ComfyUI, the
-  tool refuses to use it (exit code 3): the node has to run locally. Point
-  `comfy.port` at a free port instead.
+- **Another ComfyUI is already open?** It is reused: the tool never stops a server
+  it did not start. If it finds one on the configured port, it checks that the
+  DLSS5 node is loaded there and warns that the queue is shared and that the
+  worker needs the GPU exclusively.
+- **The configured port is taken by something else** (an SSH tunnel, another
+  application)? The tool never talks to a remote ComfyUI, but it no longer gives
+  up either: it looks for a local ComfyUI with the node on the fallback ports
+  (`comfy.port_fallback`, default 8189/8199/8200), otherwise it starts its own on
+  the first free port, and says so. The chosen port is remembered in
+  `settings.json`, so the next run reuses that server.
 
 ## Configuration
 
@@ -225,9 +301,10 @@ Tests and lint:
 ruff check .
 ```
 
-The unit tests (translations, configuration precedence, preset resolution and
-workflow injection, cache-hit detection, output probing, settings storage,
-installation checks, GUI widgets) run **without a GPU and without ComfyUI**.
+228 unit tests cover translations, configuration precedence, presets and the
+DLSS5 settings table, workflow injection, cache-hit detection, output probing,
+the file queue, settings storage, port fallback, console hiding, installation
+checks and the GUI widgets. They run **without a GPU and without ComfyUI**.
 
 ## Licence and credits
 

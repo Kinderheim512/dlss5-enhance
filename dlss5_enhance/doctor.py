@@ -13,8 +13,8 @@ from . import installer
 from .config import Config, derive_python, load_config
 from .i18n import tr
 from .settings_store import AppSettings, save_settings, store_path
+from .spawn import run_hidden
 
-CREATE_NO_WINDOW = 0x08000000
 OK = "ok"
 MISSING = "missing"
 BROKEN = "broken"
@@ -36,14 +36,9 @@ class Check:
 
 def check_gpu() -> Check:
     try:
-        result = subprocess.run(
+        result = run_hidden(
             ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=30,
-            creationflags=CREATE_NO_WINDOW,
         )
     except (OSError, subprocess.TimeoutExpired):
         return Check("d.gpu", MISSING, tr("d.gpu_missing"))

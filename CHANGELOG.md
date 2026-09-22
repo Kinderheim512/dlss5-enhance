@@ -3,6 +3,42 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-23
+
+### Added
+
+- **Queue and drag & drop.** The GUI takes a list of files *and* folders:
+  add them with the buttons or drop them from Explorer, remove what you do not
+  want, and the list is remembered between sessions.
+- **DLSS5 sliders.** Every meaningful setting of the node is now exposed —
+  upscaling mode, DLSS model preset, local structure, skin detail, automatic
+  mask, neural intensity, local tone, look, plus motion, scene-cut threshold and
+  warm-up frames behind an *Advanced* toggle — with the same values available as
+  command-line flags. Only the controls you touch are written into the workflow;
+  *Read the workflow again* puts them back on your JSON's values.
+- **Output format in the GUI**: container (MKV/MP4/MOV) and codec
+(H.264/HEVC/AV1/ProRes Proxy), remembered like the rest.
+- Presets `x2_plus` and `x3_plus`: upscaling **and** a stronger enhancement pass.
+  `--enhance-strong` applies the same reinforcement to any preset.
+- An application icon.
+
+### Changed
+
+- A port held by an SSH tunnel (or by any non-ComfyUI process) no longer stops
+  the run: the tool looks for a local ComfyUI with the DLSS5 node on the fallback
+  ports, otherwise it starts its own on the first free port, and remembers it.
+  An already-open ComfyUI is still reused as before.
+- Every child process (pip, 7zr, the node installer, ComfyUI, ffmpeg, nvidia-smi)
+  is now started with its window hidden, and `dlss5-enhance.cmd` launches the
+  interface through `pythonw.exe`: no console window at all.
+
+### Fixed
+
+- The GUI worker thread no longer touches Tk variables, which crashed any run
+  with `main thread is not in main loop`.
+- A preset's raw codec/container values (`h265`, `mkv`) are normalised before
+  reaching the GUI's format boxes.
+
 ## [1.1.0] - 2026-09-21
 
 ### Added
@@ -66,5 +102,6 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `dlss5-enhance.spec` and `build_exe.cmd` to build a single-file executable
   with PyInstaller.
 
+[1.2.0]: ../../releases/tag/v1.2.0
 [1.1.0]: ../../releases/tag/v1.1.0
 [1.0.0]: ../../releases/tag/v1.0.0

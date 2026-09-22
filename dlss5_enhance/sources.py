@@ -56,3 +56,55 @@ def resolve_sources(
             )
         )
     return sources, True
+
+
+def resolve_many(
+    paths: Iterable[str | Path],
+    extensions: Iterable[str],
+    recursive: bool = False,
+) -> tuple[list[Path], list[str]]:
+    """Expand a mixed list of files and folders into ordered, unique sources.
+
+    Returns (sources, problems): a problem is a human-readable line for an entry
+    that could not contribute anything (missing path, folder with no video).
+    """
+    wanted = tuple(extensions)
+    sources: list[Path] = []
+    problems: list[str] = []
+    seen: set[str] = set()
+
+    for raw in paths:
+        entry = Path(str(raw)).expanduser()
+        if entry.is_dir():
+            walker = entry.rglob("*") if recursive else entry.glob("*")
+            found = sorted(
+                path
+                for path in walker
+                if path.is_file() and path.suffix.lstrip(".").lower() in wanted
+            )
+            if not found:
+                problems.append(
+                    tr(
+                        "s.no_files",
+                        extensions=", ".join(wanted),
+                        folder=entry,
+                        recursive=tr("s.recursive_suffix") if recursive else "",
+                    )
+                )
+                continue
+            for path in found:
+                _add(path, sources, seen)
+            continue
+        if not entry.is_file():
+            problems.append(tr("s.file_missing", path=entry))
+            continue
+        _add(entry, sources, seen)
+    return sources, problems
+
+
+def _add(path: Path, sources: list[Path], seen: set[str]) -> None:
+    key = str(path.resolve()).lower()
+    if key in seen:
+        return
+    seen.add(key)
+    sources.append(path)

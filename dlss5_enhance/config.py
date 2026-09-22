@@ -23,6 +23,14 @@ PRESET_JOB_VALUES: dict[str, Any] = {
     "container": "mkv",
 }
 
+#: What 'upscale + enhance' presets add on top of the upscaling mode.
+STRONG_PRESET_SETTINGS: dict[str, Any] = {
+    "local_structure_strength": 2.0,
+    "skin_structure_strength": 2.0,
+    "automatic_mask": True,
+    "dlss_model_preset": "M",
+}
+
 
 def default_presets() -> dict[str, Any]:
     """The five shipped presets; `upscaling_mode` is what actually changes."""
@@ -53,6 +61,18 @@ def default_presets() -> dict[str, Any]:
             "upscaling_mode": "3x (Ultra Performance)",
             **PRESET_JOB_VALUES,
         },
+            "x2_plus": {
+            "label": "Upscale x2 + Enhance",
+            "upscaling_mode": "2x (Performance)",
+            "settings": dict(STRONG_PRESET_SETTINGS),
+            **PRESET_JOB_VALUES,
+        },
+        "x3_plus": {
+            "label": "Upscale x3 + Enhance",
+            "upscaling_mode": "3x (Ultra Performance)",
+            "settings": dict(STRONG_PRESET_SETTINGS),
+            **PRESET_JOB_VALUES,
+        },
     }
 
 
@@ -69,6 +89,7 @@ class ComfyConfig:
     ffprobe: Path | None = None
     server_log_dir: Path | None = None
     extra_args: tuple[str, ...] = ()
+    port_fallback: tuple[int, ...] = (8189, 8199, 8200)
 
     @property
     def base_url(self) -> str:
@@ -78,7 +99,7 @@ class ComfyConfig:
     def ws_url(self) -> str:
         return f"ws://{self.host}:{self.port}/ws"
 
-    def server_command(self) -> list[str]:
+    def server_command(self, port: int | None = None) -> list[str]:
         command = [
             str(self.python),
             "-s",
@@ -86,7 +107,7 @@ class ComfyConfig:
             "--listen",
             self.host,
             "--port",
-            str(self.port),
+            str(self.port if port is None else port),
         ]
         if self.extra_model_paths_config is not None:
             command += ["--extra-model-paths-config", str(self.extra_model_paths_config)]
@@ -144,6 +165,7 @@ class Config:
     settings_path: Path | None = None
     presets: Mapping[str, Preset] = field(default_factory=dict)
     preset: Preset | None = None
+    settings_overrides: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def installed(self) -> bool:
@@ -165,6 +187,7 @@ def _defaults(base_dir: Path) -> dict[str, Any]:
             "ffprobe": None,
             "server_log_dir": "logs",
             "extra_args": [],
+            "port_fallback": [8189, 8199, 8200],
         },
         "workflow": {
             "path": DEFAULT_WORKFLOW,
@@ -188,6 +211,7 @@ def _defaults(base_dir: Path) -> dict[str, Any]:
         },
         "logging": {"dir": "logs", "level": "INFO"},
         "language": None,
+        "dlss5_settings": {},
         "run": {"autostart": True, "keep_server": False, "auto_restart": None, "preset": None},
         "presets": default_presets(),
     }
@@ -276,6 +300,7 @@ def settings_overrides(settings: Any, app_root: Path | None = None) -> dict[str,
         ),
         "ffmpeg": None if not settings.ffmpeg else str(resolve_path(settings.ffmpeg, root)),
         "ffprobe": None if not settings.ffprobe else str(resolve_path(settings.ffprobe, root)),
+        "port": getattr(settings, "comfy_port", None),
     }
     processing = {
         "output": None if not settings.output_dir else str(resolve_path(settings.output_dir, root))
@@ -348,6 +373,10 @@ def load_config(
 
     target = workflow.get("target") or {}
     settings_cfg = workflow.get("settings") or {}
+    from .dlss5_settings import coerce_all, validate
+
+    node_settings = coerce_all(dict(raw.get("dlss5_settings") or {}))
+    validate(node_settings)
     comfy_cfg = ComfyConfig(
         root=comfy_root,
         python=None if comfy_python is None else Path(comfy_python),
@@ -360,6 +389,10 @@ def load_config(
         ffprobe=_resolve_path(comfy.get("ffprobe"), origin),
         server_log_dir=_resolve_path(comfy.get("server_log_dir"), origin),
         extra_args=tuple(str(item) for item in (comfy.get("extra_args") or [])),
+        port_fallback=tuple(
+            _as_int(item, "comfy.port_fallback")
+            for item in (comfy.get("port_fallback") or [8189, 8199, 8200])
+        ),
     )
 
     return Config(
@@ -401,6 +434,7 @@ def load_config(
         config_path=config_path if config_path.is_file() else None,
         presets=presets,
         preset=preset,
+        settings_overrides=node_settings,
     )
 
 
