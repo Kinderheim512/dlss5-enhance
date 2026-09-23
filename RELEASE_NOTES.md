@@ -1,40 +1,40 @@
-# dlss5-enhance 1.3.0
+# dlss5-enhance 1.3.1
 
 Run **NVIDIA DLSS 5 neural rendering** over your videos *and your images*, on
 your own machine, through ComfyUI — with one click or one command line.
 
 ## Download
 
-- `DLSS5-Enhance-1.3.0.zip` — unzip it anywhere and run `DLSS5-Enhance.exe`.
+- `DLSS5-Enhance-1.3.1.zip` — unzip it anywhere and run `DLSS5-Enhance.exe`.
   This is the recommended download: the folder is portable, `config.yaml` and the
   example workflows are included.
 - `DLSS5-Enhance.exe` — the bare executable, if you already have the rest.
 
-## What's new in 1.3.0
+## What's new in 1.3.1
+
+- **The preset selector moved to where you work.** Each of the *Video* and
+  *Images* tabs now opens on a **Preset** block: the shipped presets as buttons,
+  and *My presets*, a dropdown listing only the presets you created. Pick one in
+  a tab and it shows in the other — it drives the same DLSS5 sliders.
+- **The *DLSS5 settings* tab keeps no preset list.** It holds only *Save as
+  preset…* and *Delete preset*, under *Custom presets*.
+- **Creating a preset is immediate.** Name it, and it appears in the dropdown of
+  both media tabs, selected and ready; the choice is written to `settings.json`
+  straight away, so it comes back on the next launch.
+- *Delete preset* is greyed out while you have not created any, and tells you
+  that shipped presets are read-only if you ask for one of those.
+
+## What's in 1.3.0
 
 - **Images, not just videos.** A second tab drives the `DLSS5EnhanceImages`
-  node: its own queue, its own workflow, its own output folder. Drop your
-  pictures on it, press *Run*, and the enhanced files land next to your videos —
-  renamed with a timestamp so a re-run never overwrites the previous one. The
-  output format (PNG, AVIF or EXR) comes from the workflow's save node and is
-  shown in the interface.
-- **Your own presets.** Adjust the sliders, then *Save as preset…*: the settings
-  are stored in `presets.yaml` next to the application, appear as a button beside
-  the shipped presets, and can be deleted from the same place.
-- **ComfyUI found on its own.** The first-run popup is gone: the tool looks for
-  an installed ComfyUI, takes ffmpeg/ffprobe from the node pack it finds, and
-  only asks for help when something is genuinely missing.
-- **A tabbed interface** — *Video*, *Images*, *DLSS5 settings* — with an
-  upscaling slider that shows the resulting size, and a bullet next to every
-  setting you changed by hand.
-
-### Fixed
-
-- The container/codec row no longer overlaps the fields around it, and the
-  *Advanced* toggle no longer draws text on top of existing controls.
-- The upscaling control really moves the slider and the size readout.
-- The worker thread no longer touches the interface from the background, which
-  crashed some runs with `main thread is not in main loop`.
+  node: its own queue, its own workflow, its own output folder. Results are
+  renamed with a timestamp so a re-run never overwrites the previous one; the
+  output format (PNG, AVIF or EXR) comes from the workflow's save node.
+- **ComfyUI found on its own**, with ffmpeg/ffprobe taken from the node pack: no
+  first-run popup, and *Setup…* is offered only when something is genuinely
+  missing.
+- A tabbed interface with an upscaling slider that shows the resulting size, and
+  a bullet next to every setting you changed by hand.
 
 ## First run
 

@@ -71,17 +71,88 @@ class GuiSmokeTests(unittest.TestCase):
                 app.shutdown()
                 root.destroy()
 
-    def test_presets_become_radio_buttons(self):
+    def test_base_presets_are_radios_in_both_media_tabs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, app, _ = self._app(tmp)
             try:
                 root.update()
-                buttons = app.preset_row.winfo_children()
-                self.assertEqual(len(buttons), len(app.config.presets))
-                labels = sorted(button.cget("text") for button in buttons)
-                self.assertIn("Premier", labels)
-                self.assertIn("Second", labels)
+                for kind in ("video", "image"):
+                    buttons = app.tabs[kind].preset_radios
+                    self.assertEqual(sorted(buttons), sorted(app.config.presets))
+                    labels = sorted(button.cget("text") for button in buttons.values())
+                    self.assertIn("Premier", labels)
+                    self.assertIn("Second", labels)
                 self.assertEqual(app.preset_var.get(), next(iter(app.config.presets)))
+            finally:
+                app.shutdown()
+                root.destroy()
+
+    def test_the_settings_tab_keeps_no_preset_list(self):
+        def descendants(widget):
+            found = []
+            for child in widget.winfo_children():
+                found.append(child)
+                found.extend(descendants(child))
+            return found
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, _ = self._app(tmp)
+            try:
+                root.update()
+                classes = [w.winfo_class() for w in descendants(app._settings_frame)]
+                self.assertNotIn("TRadiobutton", classes)
+                self.assertFalse(hasattr(app, "preset_row"))
+                for kind in ("video", "image"):
+                    self.assertIn(
+                        app.tabs[kind].preset_row,
+                        descendants(app.notebook),
+                    )
+            finally:
+                app.shutdown()
+                root.destroy()
+
+    def test_the_dropdown_is_disabled_until_a_preset_is_saved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, _ = self._app(tmp)
+            try:
+                root.update()
+                for kind in ("video", "image"):
+                    box = app.tabs[kind].user_box
+                    self.assertEqual(list(box.cget("values")), [])
+                    self.assertEqual(str(box["state"]), "disabled")
+                    self.assertEqual(box.get(), "")
+                self.assertEqual(str(app.delete_preset_button["state"]), "disabled")
+            finally:
+                app.shutdown()
+                root.destroy()
+
+    def test_the_dropdown_mirrors_the_selection_between_tabs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, _ = self._app(tmp)
+            try:
+                root.update()
+                app.preset_var.set("deux")
+                app._apply_preset()
+                app._save_preset_named("maison")
+                root.update()
+
+                app.tabs["image"].user_box.set("maison")
+                app._on_user_preset()
+                root.update()
+                self.assertEqual(app.preset_var.get(), "maison")
+                self.assertEqual(app.tabs["video"].user_box.get(), "maison")
+                self.assertEqual(str(app.delete_preset_button["state"]), "normal")
+
+                app.tabs["video"].preset_radios["deux"].invoke()
+                root.update()
+                self.assertEqual(app.preset_var.get(), "deux")
+                self.assertEqual(app.tabs["image"].user_box.get(), "")
+                self.assertTrue(
+                    app.tabs["image"].preset_radios["deux"].instate(["selected"])
+                )
+                self.assertFalse(
+                    app.tabs["image"].preset_radios["un"].instate(["selected"])
+                )
             finally:
                 app.shutdown()
                 root.destroy()
@@ -282,12 +353,25 @@ class GuiSmokeTests(unittest.TestCase):
                 root.update()
                 self.assertIn("maison", app.config.presets)
                 self.assertEqual(app.config.presets["maison"].factor, 2.0)
-                labels = [b.cget("text") for b in app.preset_row.winfo_children()]
-                self.assertTrue(any("maison" in label for label in labels))
-                app.preset_var.set("maison")
+                self.assertEqual(app.preset_var.get(), "maison")
+                for kind in ("video", "image"):
+                    box = app.tabs[kind].user_box
+                    self.assertEqual(list(box.cget("values")), ["maison"])
+                    self.assertEqual(box.get(), "maison")
+                    self.assertEqual(str(box["state"]), "readonly")
+                    self.assertNotIn("maison", app.tabs[kind].preset_radios)
+                self.assertEqual(str(app.delete_preset_button["state"]), "normal")
+
                 app._delete_preset_confirmed()
                 root.update()
                 self.assertNotIn("maison", app.config.presets)
+                for kind in ("video", "image"):
+                    box = app.tabs[kind].user_box
+                    self.assertEqual(list(box.cget("values")), [])
+                    self.assertEqual(str(box["state"]), "disabled")
+                    self.assertEqual(box.get(), "")
+                self.assertIn(app.preset_var.get(), app.tabs["video"].preset_radios)
+                self.assertEqual(str(app.delete_preset_button["state"]), "disabled")
             finally:
                 app.shutdown()
                 root.destroy()
@@ -328,6 +412,47 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertEqual(
                     again.tabs["image"].workflow_var.get(), str(base / "image_workflow.json")
                 )
+            finally:
+                again.shutdown()
+                root2.destroy()
+
+    def test_the_run_uses_the_preset_picked_in_the_dropdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, _ = self._app(tmp)
+            try:
+                root.update()
+                app.preset_var.set("deux")
+                app._apply_preset()
+                app._save_preset_named("maison")
+                root.update()
+                self.assertEqual(app._build_job("video")["preset"], "maison")
+                app.tabs["video"].preset_radios["deux"].invoke()
+                root.update()
+                self.assertEqual(app._build_job("image")["preset"], "deux")
+            finally:
+                app.shutdown()
+                root.destroy()
+
+    def test_a_user_preset_is_restored_after_a_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, base = self._app(tmp)
+            app.preset_var.set("deux")
+            app._apply_preset()
+            app._save_preset_named("maison")
+            root.update()
+            self.assertEqual(app.preset_var.get(), "maison")
+            app.shutdown()
+            root.destroy()
+
+            root2 = gui.make_root()
+            root2.withdraw()
+            again = App(root2, config_path=base / "config.yaml", state_path=base / "settings.json")
+            try:
+                root2.update()
+                self.assertEqual(again.preset_var.get(), "maison")
+                for kind in ("video", "image"):
+                    self.assertEqual(again.tabs[kind].user_box.get(), "maison")
+                    self.assertEqual(str(again.delete_preset_button["state"]), "normal")
             finally:
                 again.shutdown()
                 root2.destroy()

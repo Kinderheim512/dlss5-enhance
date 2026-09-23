@@ -57,10 +57,13 @@ class MediaTab:
         self.container_var = tk.StringVar()
         self.codec_var = tk.StringVar()
         self.dnd_ready = False
+        self.preset_radios: dict[str, ttk.Radiobutton] = {}
+        self.user_box: ttk.Combobox | None = None
         self._build()
 
     # construction ----------------------------------------------------------
     def _build(self) -> None:
+        self._build_presets()
         queue_frame = ttk.LabelFrame(self.frame, padding=8)
         queue_frame.pack(fill="both", expand=True)
         self.app._t(queue_frame, f"u.section.queue.{self.kind}", "text")
@@ -126,6 +129,27 @@ class MediaTab:
 
         self.size_label = ttk.Label(self.frame, textvariable=self.size_var, foreground="#333333")
         self.size_label.pack(fill="x", pady=(0, 4))
+
+    def _build_presets(self) -> None:
+        """Base presets as radio buttons, your own presets in a dropdown."""
+        frame = ttk.LabelFrame(self.frame, padding=8)
+        frame.pack(fill="x")
+        self.app._t(frame, "u.section.preset", "text")
+        self.preset_row = ttk.Frame(frame)
+        self.preset_row.pack(fill="x")
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=(6, 0))
+        self.user_label = ttk.Label(row)
+        self.app._t(self.user_label, "u.user_presets")
+        self.user_label.pack(side="left")
+        self.user_box = ttk.Combobox(
+            row,
+            state="disabled",
+            width=32,
+            textvariable=self.app.user_preset_var,
+        )
+        self.user_box.pack(side="left", padx=6)
+        self.user_box.bind("<<ComboboxSelected>>", self.app._on_user_preset)
 
     def _build_video_format(self, parent: ttk.Frame) -> None:
         """Container and codec on their own line, each with its own label."""
@@ -339,6 +363,9 @@ class App:
         set_language(resolve_language(self.settings.language))
 
         self.preset_var = tk.StringVar()
+        self.user_preset_var = tk.StringVar()
+        self._user_names: set[str] = set()
+        self._user_labels: dict[str, str] = {}
         self.status_var = tk.StringVar(value=tr("u.ready"))
         self.mode_var = tk.StringVar(value="")
         self.banner_var = tk.StringVar(value="")
@@ -431,15 +458,15 @@ class App:
         self._build_settings_tab(settings_frame)
         self._build_actions()
         self._build_progress_and_log()
+        self.preset_var.trace_add("write", self._on_preset_var)
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
+        """Only the preset list lives in the media tabs; here are the actions."""
         preset_frame = ttk.LabelFrame(parent, padding=8)
         preset_frame.pack(fill="x")
-        self._t(preset_frame, "u.section.preset", "text")
-        self.preset_row = ttk.Frame(preset_frame)
-        self.preset_row.pack(fill="x")
+        self._t(preset_frame, "u.section.custom_presets", "text")
         actions = ttk.Frame(preset_frame)
-        actions.pack(fill="x", pady=(6, 0))
+        actions.pack(fill="x")
         self.save_preset_button = ttk.Button(actions, command=self._save_preset)
         self._t(self.save_preset_button, "u.save_preset")
         self.save_preset_button.pack(side="left")
@@ -662,27 +689,76 @@ class App:
             tab.refresh()
 
     def _fill_presets(self) -> None:
-        for child in self.preset_row.winfo_children():
-            child.destroy()
+        """Radios for the presets from config.yaml, dropdown for your own."""
         assert self.config is not None
         presets = self.config.presets
-        if not presets:
-            ttk.Label(self.preset_row, text=tr("u.preset_none")).pack(anchor="w")
-            self.preset_var.set("")
-            return
-        user = presets_store.load_user_presets(presets_store.presets_path(self._config_dir()))
-        wanted = self.settings.preset if self.settings.preset in presets else next(iter(presets))
-        self.preset_var.set(wanted)
+        raw = presets_store.load_user_presets(presets_store.presets_path(self._config_dir()))
+        self._user_names = {name for name in raw if name in presets}
+        self._user_labels = {}
+        taken: set[str] = set()
         for name, preset in presets.items():
-            label = f"{preset.label} [custom]" if name in user else preset.label
-            ttk.Radiobutton(
-                self.preset_row,
-                text=label,
-                value=name,
-                variable=self.preset_var,
-                command=self._apply_preset,
-            ).pack(side="left", padx=(0, 12))
+            if name not in self._user_names:
+                continue
+            label = preset.label or name
+            if label in taken:
+                label = f"{label} ({name})"
+            taken.add(label)
+            self._user_labels[label] = name
+
+        base = [(name, preset) for name, preset in presets.items() if name not in self._user_names]
+        labels = list(self._user_labels)
+        for tab in self.tabs.values():
+            for child in tab.preset_row.winfo_children():
+                child.destroy()
+            tab.preset_radios = {}
+            if base:
+                for name, preset in base:
+                    button = ttk.Radiobutton(
+                        tab.preset_row,
+                        text=preset.label,
+                        value=name,
+                        variable=self.preset_var,
+                        command=self._apply_preset,
+                    )
+                    button.pack(side="left", padx=(0, 12))
+                    tab.preset_radios[name] = button
+            else:
+                ttk.Label(tab.preset_row, text=tr("u.preset_none")).pack(anchor="w")
+            if tab.user_box is not None:
+                tab.user_box.configure(
+                    values=labels, state="readonly" if labels else "disabled"
+                )
+            tab.user_label.configure(text=tr("u.user_presets"))
+
+        wanted = self.settings.preset if self.settings.preset in presets else None
+        if wanted is None:
+            wanted = base[0][0] if base else next(iter(presets), "")
+        self.preset_var.set(wanted)
+        self._sync_preset_widgets()
         self._refresh_mode()
+
+    def _on_preset_var(self, *_args) -> None:
+        """Keep the dropdown and the buttons in step with the active preset."""
+        self._sync_preset_widgets()
+
+    def _sync_preset_widgets(self) -> None:
+        active = self.preset_var.get()
+        label = next(
+            (text for text, name in self._user_labels.items() if name == active), ""
+        )
+        if self.user_preset_var.get() != label:
+            self.user_preset_var.set(label)
+        state = "normal" if self._user_names else "disabled"
+        with contextlib.suppress(tk.TclError):
+            self.delete_preset_button.configure(state=state)
+
+    def _on_user_preset(self, _event=None) -> None:
+        """A pick in the dropdown is a preset pick like any other."""
+        name = self._user_labels.get(self.user_preset_var.get())
+        if not name:
+            return
+        self.preset_var.set(name)
+        self._apply_preset()
 
     def _config_dir(self) -> Path:
         if self.config is not None and self.config.config_path is not None:
@@ -715,6 +791,7 @@ class App:
                 self._mark_dirty(name)
         for tab in self.tabs.values():
             tab.apply_preset_format(preset)
+        self._sync_preset_widgets()
         self._refresh_mode()
         self._save_state()
 
@@ -851,6 +928,7 @@ class App:
         self._append(tr("u.preset_saved", name=key, path=target))
         self.settings.preset = key
         self._load_config()
+        self._save_state()
 
     def _delete_preset(self) -> None:
         name = self.preset_var.get()
@@ -872,6 +950,7 @@ class App:
         if self.settings.preset == name:
             self.settings.preset = None
         self._load_config()
+        self._save_state()
 
     # state -----------------------------------------------------------------
     def _on_language(self, _event=None) -> None:

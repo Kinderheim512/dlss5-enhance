@@ -832,6 +832,8 @@ MESSAGES: dict[str, tuple[str, str]] = {
     # gui
     "u.title": ("DLSS5 Enhance {version}", "DLSS5 Enhance {version}"),
     "u.section.preset": ("Preset", "Preset"),
+    "u.section.custom_presets": ("Custom presets", "Presets personnalisés"),
+    "u.user_presets": ("My presets", "Mes presets"),
     "u.section.paths": ("Output and workflow", "Sortie et workflow"),
     "u.section.progress": ("Progress", "Progression"),
     "u.section.log": ("Log", "Journal"),

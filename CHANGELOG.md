@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-09-23
+
+### Changed
+
+- **The preset selector lives with the media.** Each of the *Video* and *Images*
+  tabs now opens on a *Preset* block: the shipped presets as buttons, and
+  *My presets*, a dropdown holding only the presets you created. The selection is
+  shared, so picking one in a tab shows it in the other.
+- **The *DLSS5 settings* tab keeps no preset list.** It holds only *Save as
+  preset…* and *Delete preset*; the block is titled *Custom presets*.
+- The `[custom]` suffix is gone: your presets are the dropdown's contents, so the
+  buttons no longer need to mark them.
+- Creating or deleting a preset is written to `settings.json` straight away, so
+  the choice survives a restart.
+
+### Fixed
+
+- *Delete preset* is disabled while no preset of your own exists, and reports
+  that only your own presets can be deleted when a shipped one is selected.
+
 ## [1.3.0] - 2026-09-23
 
 ### Added
@@ -142,6 +162,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `dlss5-enhance.spec` and `build_exe.cmd` to build a single-file executable
   with PyInstaller.
 
+[1.3.1]: ../../releases/tag/v1.3.1
 [1.3.0]: ../../releases/tag/v1.3.0
 [1.2.0]: ../../releases/tag/v1.2.0
 [1.1.0]: ../../releases/tag/v1.1.0

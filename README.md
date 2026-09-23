@@ -87,6 +87,11 @@ A preset writes its upscaling mode into the `DLSS5Settings` node of your
 workflow and leaves everything else alone: your model preset, style, masking and
 strength settings are respected.
 
+**Where you pick one.** Every media tab — *Video* and *Images* — opens on a
+**Preset** block: the shipped presets as buttons, and *My presets*, a dropdown
+holding the ones you created. The choice is shared: picking a preset in one tab
+shows it in the other, because it drives the same DLSS5 sliders.
+
 A preset is only a recipe: picking one **moves the sliders and the format boxes**
 of the *DLSS5 settings* tab, and you can then adjust everything by hand.
 **Only what you touch is written** into the workflow — the rest of your JSON is
@@ -94,11 +99,15 @@ left exactly as you exported it. The *Read the workflow again* button puts the
 controls back on the values your workflow really contains.
 
 **Your own presets.** Set the sliders the way you like and press *Save as
-preset…*: the current values are stored under the name you type, in
-`presets.yaml` next to the application (next to `config.yaml`). They then appear
-as buttons beside the shipped ones, are picked by `--preset`, and can be deleted
-with *Delete preset* (only your own — the ones in `config.yaml` are read-only).
-`presets.yaml` is machine-specific and is never committed.
+preset…* (in the *DLSS5 settings* tab): the current values are stored under the
+name you type, in `presets.yaml` next to the application (next to
+`config.yaml`). The preset then appears in the *My presets* dropdown of both
+media tabs, selected and ready, and is picked by `--preset` like any other.
+*Delete preset* removes the one currently selected (only your own — the shipped
+ones are read-only). `presets.yaml` is machine-specific and is never committed.
+
+The *DLSS5 settings* tab itself holds no preset list any more: only the two
+buttons, *Save as preset…* and *Delete preset*.
 
 **There is no 4x.** The node offers exactly `1x`, `1.5x`, `1.724x`, `2x`, `3x`.
 The tool warns you before submitting when the geometry you ask for is beyond the
@@ -354,12 +363,12 @@ Tests and lint:
 ruff check .
 ```
 
-249 unit tests cover translations, configuration precedence, presets (shipped
+254 unit tests cover translations, configuration precedence, presets (shipped
 and user-made) and the DLSS5 settings table, workflow injection, cache-hit
 detection, output probing, the file queue, settings storage, port fallback,
 source upload and result staging, image formats and the pre-flight plan, console
-hiding, installation checks, ComfyUI detection and the GUI widgets. They run
-**without a GPU and without ComfyUI**.
+hiding, installation checks, ComfyUI detection and the GUI widgets (including the
+preset dropdowns). They run **without a GPU and without ComfyUI**.
 
 ## Licence and credits
 
