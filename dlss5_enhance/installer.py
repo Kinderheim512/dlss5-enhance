@@ -161,6 +161,116 @@ def find_comfy_root(base: Path) -> Path | None:
     return None
 
 
+def _looks_like_comfy(path: Path) -> bool:
+    """True when that folder holds a ComfyUI server."""
+    return (Path(path) / "ComfyUI" / "main.py").is_file() or (
+        (Path(path) / "main.py").is_file() and (Path(path) / "comfy").is_dir()
+    )
+
+
+def _desktop_log_roots() -> list[Path]:
+    """ComfyUI Desktop logs its own command line: that names the install."""
+    import os
+    import re
+
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return []
+    log_dir = Path(appdata) / "Comfy Desktop" / "logs"
+    if not log_dir.is_dir():
+        return []
+    pattern = re.compile(r">\s*(\S*python\.exe)\s+-s\s+ComfyUI[\\/]main\.py")
+    found: list[Path] = []
+    logs = sorted(log_dir.glob("app.log*"), key=lambda item: item.stat().st_mtime, reverse=True)
+    for log in logs[:5]:
+        try:
+            text = log.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        match = pattern.search(text)
+        if match is None:
+            continue
+        # the outermost valid folder is the one the rest of the tool expects
+        valid = [parent for parent in Path(match.group(1)).parents if _looks_like_comfy(parent)]
+        if valid:
+            found.append(valid[-1])
+    return found
+
+
+def _desktop_config_roots() -> list[Path]:
+    """`config.json` of ComfyUI Desktop carries its basePath."""
+    import json
+    import os
+
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return []
+    found: list[Path] = []
+    for name in ("ComfyUI", "Comfy Desktop", "ComfyUI-Desktop"):
+        config = Path(appdata) / name / "config.json"
+        if not config.is_file():
+            continue
+        try:
+            payload = json.loads(config.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        base = payload.get("basePath") if isinstance(payload, dict) else None
+        if base and _looks_like_comfy(Path(base)):
+            found.append(Path(base))
+    return found
+
+
+def looks_like_comfy(path: str | Path) -> bool:
+    """Public test: does that folder hold a ComfyUI server?"""
+    return _looks_like_comfy(Path(path))
+
+
+def candidate_comfy_roots() -> list[Path]:
+    """Every plausible ComfyUI install on this machine, best guess first."""
+    import os
+
+    from .app_paths import TOOL_ROOT
+
+    roots: list[Path] = []
+    roots.extend(_desktop_log_roots())
+    roots.extend(_desktop_config_roots())
+    home = Path.home()
+    roots.append(TOOL_ROOT / "comfyui")
+    roots.append(home / "comfy" / "ComfyUI")
+    roots.append(home / "ComfyUI")
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots.append(
+            Path(local) / "Programs" / "@comfyorgcomfyui-electron" / "resources" / "ComfyUI"
+        )
+    roots.append(TOOL_ROOT)
+    seen: list[Path] = []
+    for root in roots:
+        if root not in seen:
+            seen.append(root)
+    return seen
+
+
+def find_installed_comfyui() -> Path | None:
+    """The best ComfyUI install found on disk, preferring one with the node."""
+    from .config import derive_python
+
+    usable: list[Path] = []
+    for root in candidate_comfy_roots():
+        if not _looks_like_comfy(root):
+            continue
+        if derive_python(root, None) is None:
+            continue
+        usable.append(root)
+    if not usable:
+        return None
+    for root in usable:
+        node = node_dir(root) / "nodes" / "enhance_video.py"
+        if node.is_file():
+            return root
+    return usable[0]
+
+
 def install_comfyui(app_dir: Path, progress: ProgressFn | None = None) -> Path:
     """Download and unpack the official Windows portable build; return its root."""
     app_dir = Path(app_dir)

@@ -8,7 +8,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from .comfy_client import ComfyClient
+from . import image_formats, staging
+from .comfy_client import ComfyClient, ComfyError
 from .comfy_server import ComfyServer, ServerHandle
 from .config import Config, TargetSelector
 from .errors import ServerError, UsageError, WorkflowError
@@ -64,10 +65,12 @@ from .report import (
 from .sink import Sink
 from .workflow import (
     REQUIRED_INPUTS,
+    build_image_prompt,
     build_prompt,
     load_workflow,
     missing_workflow_message,
     read_upscaling_mode,
+    resolve_by_class_types,
     resolve_target,
 )
 
@@ -90,12 +93,17 @@ class Orchestrator:
         sink: Sink,
         force: bool = False,
         check_only: bool = False,
+        mode: str = "video",
     ) -> None:
         self.config = config
         self.logger = logger
         self.sink = sink
         self.force = force
         self.check_only = check_only
+        self.mode = mode
+        self.loader_id: str = ""
+        self.saver_id: str = ""
+        self.saver_class_type: str = ""
         self.preset: Preset | None = config.preset
         self.client = ComfyClient(config.comfy.base_url)
         self.server = ComfyServer(config.comfy, self.client, logger)
@@ -120,7 +128,8 @@ class Orchestrator:
             handle = self.server.ensure(self.config.run.autostart)
             started_by_us = handle.started_by_us
             self._validate_against_server()
-            self._check_encoders(sources)
+            if self.mode != "image":
+                self._check_encoders(sources)
             self._warn_geometry_limits(sources)
             if self.check_only:
                 self._print_plan(sources)
@@ -141,6 +150,9 @@ class Orchestrator:
         return exit_code(results)
 
     def _validate_environment(self) -> None:
+        if self.mode == "image":
+            self._validate_image_environment()
+            return
         processing = self.config.processing
         if not self.config.workflow.path.is_file():
             raise UsageError(missing_workflow_message(self.config.workflow.path))
@@ -216,6 +228,84 @@ class Orchestrator:
             self.config.workflow.settings_class_type,
             self.config.workflow.settings_upscaling_input,
         )
+
+    def _validate_image_environment(self) -> None:
+        """The image workflow needs a loader, the DLSS5 node and a save node."""
+        image = self.config.workflow.image
+        if image is None:
+            raise UsageError(tr("j.image_not_configured"))
+        if not image.path.is_file():
+            raise UsageError(missing_workflow_message(image.path))
+        self.workflow = load_workflow(image.path)
+        self.target_id = resolve_target(self.workflow, self.config.workflow.image_target)
+        found = resolve_by_class_types(self.workflow, (image.loader_class_type,))
+        if found is None:
+            raise WorkflowError(tr("j.no_loader", class_type=image.loader_class_type))
+        self.loader_id = found[0]
+        saver = resolve_by_class_types(self.workflow, image.saver_class_types)
+        if saver is None:
+            raise WorkflowError(
+                tr("j.no_saver", types=", ".join(image.saver_class_types))
+            )
+        self.saver_id, self.saver_class_type = saver
+        self.output_dir = self.config.processing.output
+        if self.output_dir is None:
+            raise UsageError(tr("j.no_output_dir"))
+        self._validate_preset()
+        self._format_values()
+
+    def _format_values(self) -> dict:
+        """The sub-inputs needed to switch the format, or {} when none is needed.
+
+        A dynamic combo only carries the sub-inputs of the option the workflow was
+        exported with, so asking for another format needs a workflow exported with
+        it - that is refused with a message that says exactly that.
+        """
+        image = self.config.workflow.image
+        wanted = image_formats.normalize(self.config.processing.image_format)
+        current = self._workflow_format()
+        if image is None or not wanted or wanted == current:
+            return {}
+        values = image_formats.inputs_for(wanted, image.saver_format_input)
+        inputs = (self.workflow.get(self.saver_id) or {}).get("inputs") or {}
+        missing = sorted(key for key in values if key not in inputs)
+        if missing:
+            raise UsageError(
+                tr(
+                    "j.format_needs_export",
+                    wanted=wanted,
+                    current=current,
+                    node=self.saver_class_type,
+                    keys=", ".join(missing),
+                )
+            )
+        return values
+
+    def _workflow_path(self) -> Path:
+        """The workflow file this run really uses."""
+        image = self.config.workflow.image
+        if self.mode == "image" and image is not None:
+            return image.path
+        return self.config.workflow.path
+
+    def _workflow_format(self) -> str:
+        """The format the workflow's save node is set to (png, avif, exr)."""
+        image = self.config.workflow.image
+        if image is None or not self.saver_id:
+            return "png"
+        inputs = (self.workflow.get(self.saver_id) or {}).get("inputs") or {}
+        value = inputs.get(image.saver_format_input)
+        if isinstance(value, (list, tuple)) and value:
+            return str(value[0])
+        return str(value or "png")
+
+    def _image_format(self) -> str:
+        """The format the run will really produce."""
+        wanted = image_formats.normalize(self.config.processing.image_format)
+        current = self._workflow_format()
+        if wanted and wanted == current:
+            return wanted
+        return current
 
     def _validate_against_server(self) -> None:
         class_type = str(self.workflow[self.target_id].get("class_type") or "")
@@ -303,7 +393,7 @@ class Orchestrator:
                 node=self.target_id,
             )
         )
-        self.sink.line(tr("j.plan_workflow", path=self.config.workflow.path))
+        self.sink.line(tr("j.plan_workflow", path=self._workflow_path()))
         self.sink.line(
             tr(
                 "j.plan_preset",
@@ -323,14 +413,18 @@ class Orchestrator:
                     ),
                 )
             )
-        self.sink.line(
-            tr("j.plan_codec", codec=codec, container=container, quality=quality)
-        )
+        if self.mode == "image":
+            self.sink.line(tr("j.plan_image_format", format=self._image_format()))
+        else:
+            self.sink.line(
+                tr("j.plan_codec", codec=codec, container=container, quality=quality)
+            )
         self.sink.line(
             tr("j.plan_upscaling", factor=factor, width=width, height=height)
         )
         self.sink.line(tr("j.plan_output", path=self.output_dir))
-        self.sink.line(tr("j.plan_encoders", table=self._encoder_report(width, height)))
+        if self.mode != "image":
+            self.sink.line(tr("j.plan_encoders", table=self._encoder_report(width, height)))
         applied = self._settings_values() or {}
         self.sink.line(
             tr(
@@ -373,12 +467,16 @@ class Orchestrator:
     def _process_all(
         self, sources: list[Path], handle: ServerHandle, folder_mode: bool
     ) -> list[JobResult]:
+        if self.mode == "image":
+            return self._process_all_images(sources, handle)
         results: list[JobResult] = []
         restarts = 0
         total = len(sources)
         for index, source in enumerate(sources, start=1):
             if self.cancelled():
-                results.extend(self._abandon(sources[index - 1 :], tr("j.abandoned_cancelled")))
+                results.extend(
+                    self._abandon(sources[index - 1 :], tr("j.abandoned_cancelled"))
+                )
                 break
             result = self._process_one(source, index, total, handle)
             results.append(result)
@@ -406,6 +504,177 @@ class Orchestrator:
             else:
                 restarts = 0
         return results
+
+    def _process_all_images(
+        self, sources: list[Path], handle: ServerHandle
+    ) -> list[JobResult]:
+        """Images are still processed one at a time, like the videos."""
+        results: list[JobResult] = []
+        total = len(sources)
+        for index, source in enumerate(sources, start=1):
+            if self.cancelled():
+                results.extend(self._abandon(sources[index - 1 :], tr("j.abandoned_cancelled")))
+                break
+            result = self._process_image(source, index, total, handle)
+            results.append(result)
+            if result.status == REPORT_CANCELLED:
+                results.extend(self._abandon(sources[index:], tr("j.abandoned_cancelled")))
+                break
+            if result.status == REPORT_CRASHED:
+                if index == total:
+                    break
+                if not self._confirm_restart(index, total):
+                    results.extend(self._abandon(sources[index:], tr("j.abandoned_refused")))
+                    break
+                handle = self._restart_server(handle)
+        return results
+
+    def _process_image(
+        self, source: Path, index: int, total: int, handle: ServerHandle
+    ) -> JobResult:
+        image = self.config.workflow.image
+        assert image is not None
+        started = time.monotonic()
+        self._last_milestone = -1
+        try:
+            format_values = self._format_values()
+        except UsageError as exc:
+            self.logger.error("%s", exc)
+            raise
+        fmt = image_formats.normalize(self.config.processing.image_format) or (
+            self._workflow_format()
+        )
+        self.logger.info(
+            tr("j.image_header", index=index, total=total, name=source.name, fmt=fmt)
+        )
+        token = uuid.uuid4().hex
+        prefix = staging.result_prefix(source.stem, token)
+        try:
+            relative = staging.upload_source(self.client, source)
+        except ComfyError as exc:
+            self.logger.error("%s: %s", source.name, exc)
+            return JobResult(source=source, status=STATUS_FAILED, reason=str(exc))
+
+        settings_values = self._settings_values()
+        settings_id = None
+        if settings_values:
+            settings_id = resolve_target(
+                self.workflow,
+                TargetSelector(class_type=self.config.workflow.settings_class_type),
+            )
+        saver_values: dict = {image.saver_input: prefix}
+        saver_values.update(format_values)
+        try:
+            prompt = build_image_prompt(
+                self.workflow,
+                self.loader_id,
+                {image.loader_input: relative},
+                self.saver_id,
+                saver_values,
+                settings_id=settings_id,
+                settings_values=settings_values,
+            )
+        except WorkflowError as exc:
+            self.logger.error("%s: %s", source.name, exc)
+            return JobResult(source=source, status=STATUS_FAILED, reason=str(exc))
+
+        result = self._run_prompt(source, prompt, index, total, started, handle)
+        if result.status in (STATUS_NEW, STATUS_CACHE):
+            produced = staging.fetch_results(
+                self.client,
+                prefix,
+                self.output_dir,
+                source.stem,
+                self.config.processing.image_extensions,
+            )
+            if produced:
+                result.output = produced[0]
+                result.status = STATUS_NEW
+                for extra in produced[1:]:
+                    self.logger.info(tr("j.image_extra", path=extra))
+            else:
+                result.status = STATUS_CACHE
+                result.output = staging.newest_local(self.output_dir, source.stem)
+            self.logger.info("%s", format_result_line(result))
+        return result
+
+    def _run_prompt(
+        self,
+        source: Path,
+        prompt: dict,
+        index: int,
+        total: int,
+        started: float,
+        handle: ServerHandle,
+    ) -> JobResult:
+        """Submit one prompt and follow it; the caller interprets the outcome."""
+        client_id = uuid.uuid4().hex
+        self.logger.debug("Submitted prompt: %s", _dump(prompt))
+        try:
+            prompt_id = self.client.submit(prompt, client_id)
+        except Exception as exc:
+            self.sink.clear()
+            self.logger.error(tr("j.submit_refused", name=source.name, error=exc))
+            return JobResult(
+                source=source,
+                status=STATUS_FAILED,
+                reason=tr("j.submit_refused_reason", error=exc),
+                seconds=time.monotonic() - started,
+            )
+        self.logger.info(tr("j.prompt_submitted", name=source.name, prompt=prompt_id))
+        monitor = JobMonitor(
+            self.client, self.server.ws_url, prompt_id, client_id, self.target_id, self.logger
+        )
+        outcome = monitor.run(
+            timeout=self.config.processing.timeout,
+            server_alive=self.server.is_process_alive,
+            interrupt=self.client.interrupt,
+            on_tick=self._tick(index, total, source.name),
+            cancelled=self.cancelled,
+        )
+        self.sink.clear()
+        elapsed = time.monotonic() - started
+        cached = bool(
+            self.target_id is not None and str(self.target_id) in outcome.cached_nodes
+        )
+        if outcome.status == STATUS_CANCELLED:
+            self.server.wait_queue_empty(timeout=30.0)
+            self.logger.warning(tr("j.job_cancelled", name=source.name))
+            return JobResult(
+                source=source,
+                status=REPORT_CANCELLED,
+                reason=tr("t.status.cancelled"),
+                seconds=elapsed,
+            )
+        if outcome.status == STATUS_CRASHED:
+            tail = self.server.tail_log(30)
+            self.logger.error(tr("j.server_disappeared", name=source.name))
+            for line in tail:
+                self.logger.error(tr("j.server_line", line=line))
+            return JobResult(
+                source=source,
+                status=REPORT_CRASHED,
+                reason=outcome.error,
+                seconds=elapsed,
+                details=tail,
+            )
+        if outcome.status == STATUS_TIMEOUT:
+            self.server.wait_queue_empty(timeout=30.0)
+            self.logger.error("%s: %s", source.name, outcome.error)
+            return JobResult(
+                source=source, status=REPORT_TIMEOUT, reason=outcome.error, seconds=elapsed
+            )
+        if outcome.status == STATUS_ERROR:
+            self.logger.error(tr("j.render_failed", name=source.name, error=outcome.error))
+            return JobResult(
+                source=source, status=STATUS_FAILED, reason=outcome.error, seconds=elapsed
+            )
+        return JobResult(
+            source=source,
+            status=STATUS_CACHE if cached else STATUS_NEW,
+            seconds=elapsed,
+            cached_signal=cached,
+        )
 
     def _abandon(self, remaining: list[Path], reason: str) -> list[JobResult]:
         return [

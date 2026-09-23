@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, image_formats
 from .app_paths import TOOL_ROOT
 from .comfy_client import ComfyError
 from .config import Config, load_config
@@ -50,6 +50,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", nargs="?", help="a single source video file")
     parser.add_argument("--folder", help="process every matching video in this folder")
+    parser.add_argument(
+        "--images",
+        help="a source image, or a folder of images (runs the image node instead)",
+    )
+    parser.add_argument(
+        "--image-workflow", dest="image_workflow", help="API workflow for the image node"
+    )
+    parser.add_argument(
+        "--image-format",
+        dest="image_format",
+        choices=list(image_formats.NAMES),
+        help="image output format (the workflow's save node must support it)",
+    )
+    parser.add_argument(
+        "--image-extensions",
+        dest="image_extensions",
+        help="comma-separated list, default png,jpg,jpeg,webp,bmp,tif,tiff",
+    )
     parser.add_argument("--preset", help="named preset from config.yaml (see --list-presets)")
     parser.add_argument(
         "--list-presets",
@@ -223,6 +241,8 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "verify_neural_rendering": args.verify_neural_rendering,
         "output": output,
         "extensions": list(normalize_extensions(args.extensions)) or None,
+        "image_extensions": list(normalize_extensions(args.image_extensions)) or None,
+        "image_format": args.image_format,
         "timeout": args.timeout,
     }
     run = {
@@ -237,6 +257,10 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
     if workflow:
         overrides["workflow"] = {"path": workflow}
+    if args.image_workflow:
+        overrides.setdefault("workflow", {})["image"] = {
+            "path": str(Path(args.image_workflow).expanduser().resolve())
+        }
     node_settings = _node_settings_from_args(args)
     if node_settings:
         overrides["dlss5_settings"] = node_settings
@@ -250,6 +274,18 @@ def overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
 def resolve_sources_from_args(
     args: argparse.Namespace, config: Config
 ) -> tuple[list[Path], bool]:
+    """Videos by default, images when --images is used."""
+    if args.images:
+        target = Path(args.images).expanduser()
+        if not target.exists():
+            raise UsageError(tr("s.file_missing", path=target))
+        return resolve_sources(
+            input_path=None if target.is_dir() else str(target),
+            folder=str(target) if target.is_dir() else None,
+            extensions=config.processing.image_extensions,
+            recursive=args.recursive,
+            warn=lambda message: print(message, file=sys.stderr),
+        )
     return resolve_sources(
         input_path=args.input,
         folder=args.folder,
@@ -334,6 +370,8 @@ def run_cli(argv: Sequence[str]) -> int:
     logger.info(tr("j.journal", path=log_path))
     if config.config_path:
         logger.info(tr("j.configuration", path=config.config_path))
+    if args.images:
+        logger.info(tr("j.image_mode", count=len(sources)))
     if config.preset is not None:
         logger.info(
             tr(
@@ -350,6 +388,7 @@ def run_cli(argv: Sequence[str]) -> int:
         sink=sink,
         force=args.force,
         check_only=args.check,
+        mode="image" if args.images else "video",
     )
     try:
         code = orchestrator.run(sources, folder_mode)

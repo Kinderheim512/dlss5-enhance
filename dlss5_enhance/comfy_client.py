@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -46,7 +47,7 @@ class ComfyClient:
                 f"{self.base_url}/object_info/{class_type}", timeout=self.timeout
             )
         except requests.RequestException as exc:
-            raise ComfyError(f"{self.base_url} injoignable : {exc}") from exc
+            raise ComfyError(tr("c.unreachable", url=self.base_url, error=exc)) from exc
         if response.status_code != 200:
             return None
         try:
@@ -93,7 +94,7 @@ class ComfyClient:
                 f"{self.base_url}/history/{prompt_id}", timeout=self.timeout
             )
         except requests.RequestException as exc:
-            raise ComfyError(f"{self.base_url} injoignable : {exc}") from exc
+            raise ComfyError(tr("c.unreachable", url=self.base_url, error=exc)) from exc
         if response.status_code != 200:
             return None
         try:
@@ -105,11 +106,110 @@ class ComfyClient:
         entry = payload.get(prompt_id)
         return dict(entry) if isinstance(entry, Mapping) else None
 
+    def upload_image(
+        self, path: Path, subfolder: str = "", type_: str = "input"
+    ) -> str:
+        """POST /upload/image: put a file in ComfyUI's input folder.
+
+        Returns the value `LoadImage` expects: "subfolder/name" when a
+        subfolder was asked for, the bare name otherwise.
+        """
+        source = Path(path)
+        try:
+            with source.open("rb") as handle:
+                response = requests.post(
+                    f"{self.base_url}/upload/image",
+                    files={"image": (source.name, handle, "application/octet-stream")},
+                    data={"type": type_, "subfolder": subfolder, "overwrite": "true"},
+                    timeout=max(self.timeout, 120.0),
+                )
+        except (requests.RequestException, OSError) as exc:
+            raise ComfyError(tr("c.upload_failed", name=source.name, error=exc)) from exc
+        if response.status_code != 200:
+            raise ComfyError(tr("c.upload_http", name=source.name, status=response.status_code))
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ComfyError(tr("c.upload_json", name=source.name)) from exc
+        name = str(payload.get("name") or "")
+        if not name:
+            raise ComfyError(tr("c.upload_json", name=source.name))
+        folder = str(payload.get("subfolder") or "")
+        return f"{folder}/{name}" if folder else name
+
+    def output_files(self, subfolder: str = "") -> list[str]:
+        """GET /internal/files/output: the file names in the output folder."""
+        _ = subfolder  # the route lists the output root only
+        try:
+            response = requests.get(
+                f"{self.base_url}/internal/files/output", timeout=self.timeout
+            )
+        except requests.RequestException as exc:
+            raise ComfyError(tr("c.unreachable", url=self.base_url, error=exc)) from exc
+        if response.status_code != 200:
+            return []
+        try:
+            payload = response.json()
+        except ValueError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        marker = " [output]"
+        names: list[str] = []
+        for entry in payload:
+            text = str(entry)
+            if text.endswith(marker):
+                text = text[: -len(marker)]
+            if text:
+                names.append(text)
+        return names
+
+    def view(
+        self, filename: str, subfolder: str = "", type_: str = "output"
+    ) -> bytes:
+        """GET /view: the bytes of a generated file."""
+        params: dict[str, Any] = {"filename": filename, "type": type_}
+        if subfolder:
+            params["subfolder"] = subfolder
+        try:
+            response = requests.get(
+                f"{self.base_url}/view", params=params, timeout=max(self.timeout, 120.0)
+            )
+        except requests.RequestException as exc:
+            raise ComfyError(tr("c.unreachable", url=self.base_url, error=exc)) from exc
+        if response.status_code != 200:
+            return b""
+        return response.content
+
+    def folder_paths(self) -> dict[str, Any]:
+        """GET /internal/folder_paths: where ComfyUI reads and writes files."""
+        try:
+            response = requests.get(
+                f"{self.base_url}/internal/folder_paths", timeout=self.timeout
+            )
+        except requests.RequestException as exc:
+            raise ComfyError(tr("c.unreachable", url=self.base_url, error=exc)) from exc
+        if response.status_code != 200:
+            return {}
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        return dict(payload) if isinstance(payload, Mapping) else {}
+
+    def folder(self, kind: str) -> Path | None:
+        """The first input/output folder the server declares."""
+        for entry in self.folder_paths().get(kind) or []:
+            candidate = Path(str(entry))
+            if candidate.is_dir():
+                return candidate
+        return None
+
     def queue_state(self) -> dict[str, Any]:
         try:
             response = requests.get(f"{self.base_url}/queue", timeout=self.timeout)
         except requests.RequestException as exc:
-            raise ComfyError(f"{self.base_url} injoignable : {exc}") from exc
+            raise ComfyError(tr("c.unreachable", url=self.base_url, error=exc)) from exc
         if response.status_code != 200:
             return {}
         try:

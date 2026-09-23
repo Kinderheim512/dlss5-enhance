@@ -1,19 +1,20 @@
 # dlss5-enhance
 
-Run **NVIDIA DLSS 5 neural rendering** over your videos, on your own machine,
-through ComfyUI — with one click or one command line.
+Run **NVIDIA DLSS 5 neural rendering** over your videos *and your images*, on
+your own machine, through ComfyUI — with one click or one command line.
 
 DLSS 5 reconstructs material detail that a renderer or a video generator has to
 leave out: skin, hair, fabric structure. This tool drives the
 [ComfyUI-DLSS5-Enhancer](https://github.com/Blueforcer/ComfyUI-DLSS5-Enhancer)
-node for you: it starts ComfyUI if needed, feeds it your video, follows the
-render, writes the result where you asked, and hands the machine back.
+nodes for you: it starts ComfyUI if needed, feeds it your files, follows the
+render, writes the results where you asked, and hands the machine back.
 
 It is an **orchestrator**, not a renderer: no NVIDIA, ReShade or RenoDX binary is
 bundled or redistributed here.
 
 ```
-Upscale x2 · 480x270 -> 960x540, audio kept
+Video  · Upscale x2 · 480x270 -> 960x540, audio kept
+Image  · Upscale x2 · 480x270 -> 960x540, written back as PNG
 ```
 
 ## What you need
@@ -30,23 +31,27 @@ downloaded on the first run, from its own project.
 
 ## Quick start
 
-1. Download `DLSS5-Enhance-1.1.0.zip` from the
+1. Download `DLSS5-Enhance-1.3.0.zip` from the
    [latest release](../../releases/latest)
    and unzip it wherever you like (the folder is portable).
 2. Run `DLSS5-Enhance.exe` — no argument opens the interface.
-3. On the first run, open **Setup…**:
-   - it lists what is present and what is missing (GPU, ComfyUI, node pack,
+3. ComfyUI is looked for **automatically** at startup, and its ffmpeg/ffprobe
+   are taken from the node pack — an existing installation is recognised as
+   ready, with no popup. If something really is missing, a banner appears: open
+   **Setup…** and it
+   - lists what is present and what is missing (GPU, ComfyUI, node pack,
      runtime, ffmpeg, disk space);
-   - it points at an existing ComfyUI if it finds one, or lets you browse to it,
+   - points at an existing ComfyUI if it finds one, or lets you browse to it,
      or downloads the portable build;
-   - it installs the node pack and its dependencies;
-   - it shows the **third-party licence notice** of the DLSS 5 runtime before
+   - installs the node pack and its dependencies;
+   - shows the **third-party licence notice** of the DLSS 5 runtime before
      downloading it (about 467 MB) — nothing is downloaded before you accept;
-   - it ends with a **self test**: a one-second clip is rendered, which proves
-     the whole chain works.
-4. Add your videos to the **queue** (the *Add files…* / *Add a folder…* buttons,
-   or just **drag and drop** them on the list), pick a preset, pick the output
-   folder, press **Run**. The queue is remembered between sessions.
+   - ends with a **self test**: a one-second clip is rendered, which proves the
+     whole chain works.
+4. Pick the **Video** or the **Images** tab, add your files to the **queue** (the
+   *Add files…* / *Add a folder…* buttons, or just **drag and drop** them on the
+   list), pick a preset, pick the output folder, press **Run**. Each tab keeps
+   its own queue, and both are remembered between sessions.
 
 The first render starts ComfyUI, which takes about 30 seconds; the next ones
 reuse it.
@@ -88,6 +93,13 @@ of the *DLSS5 settings* tab, and you can then adjust everything by hand.
 left exactly as you exported it. The *Read the workflow again* button puts the
 controls back on the values your workflow really contains.
 
+**Your own presets.** Set the sliders the way you like and press *Save as
+preset…*: the current values are stored under the name you type, in
+`presets.yaml` next to the application (next to `config.yaml`). They then appear
+as buttons beside the shipped ones, are picked by `--preset`, and can be deleted
+with *Delete preset* (only your own — the ones in `config.yaml` are read-only).
+`presets.yaml` is machine-specific and is never committed.
+
 **There is no 4x.** The node offers exactly `1x`, `1.5x`, `1.724x`, `2x`, `3x`.
 The tool warns you before submitting when the geometry you ask for is beyond the
 node's limits (long edge 7680, short edge 4320).
@@ -120,13 +132,42 @@ are made of.
 
 ## Files and queue
 
-- The queue takes **files and folders**. A folder is expanded to the video files
-  it contains, in the order you added it; duplicates are ignored.
+- Each tab has its **own queue**: one for videos, one for images. The queue takes
+  **files and folders**. A folder is expanded to the files it contains (the
+  extensions the tab watches), in the order you added it; duplicates are ignored.
 - **Drag and drop** works from Explorer (files or folders). If the optional
   `tkinterdnd2` module is missing, the buttons still work.
 - A path that disappeared is reported when you drop it, and the whole queue is
   re-checked before a run: nothing is silently skipped.
 - The batch runs **one file at a time** — the GPU is given to the DLSS5 worker.
+
+## Images
+
+The **Images** tab drives the `DLSS5EnhanceImages` node. It works like the video
+tab — same queue, same presets, same DLSS5 sliders — with three differences:
+
+- it uses its **own workflow** (`workflow.image.path`, default
+  `workflows/exemple_dlss5_image.json`) and its **own output folder**
+  (`settings.json` → `image_output_dir`), so images never land among your videos;
+- the sources are **uploaded** to ComfyUI's input folder, then the results are
+  fetched back and renamed `stem_YYYYMMDD-HHMMSS.ext` in your output folder (a
+  re-run therefore never overwrites the previous file);
+- the **output format belongs to the workflow**. The tab shows it; it is not
+  chosen in the interface, because the save node's format sub-options only exist
+  for the format it exports. Edit `SaveImageAdvanced` in your workflow to change
+  it (PNG, AVIF or EXR).
+
+The workflow you provide must contain a `DLSS5EnhanceImages` node (the injection
+target), a `LoadImage` node feeding it, and a `SaveImageAdvanced` (or `SaveImage`)
+node writing the result. Sources are never modified: the originals stay where
+they are.
+
+On the command line:
+
+```bat
+DLSS5-Enhance.exe --cli --preset x2 --images D:\photos --output D:\out
+DLSS5-Enhance.exe --cli --preset x2 --images picture.png
+```
 
 ## Output format
 
@@ -138,6 +179,9 @@ are made of.
 
 The extension of the result follows the container: a `.webm` source comes out as
 `.mkv` unless you ask for something else.
+
+This section is about **videos**. For images, the format is the workflow's save
+node's (`SaveImageAdvanced`: PNG, AVIF or EXR) — see *Images* above.
 
 ## Command line
 
@@ -177,8 +221,12 @@ DLSS5-Enhance.exe --cli --lang fr --preset x3 video.mp4
 | `--max-frames <n>` | 0 renders the whole file |
 | `--copy-audio` / `--no-copy-audio` | mux the source audio |
 | `--verify-neural-rendering` / `--no-...` | fail when feature-18 execution cannot be proven |
-| `--workflow <json>` | workflow exported in API format |
-| `--extensions mp4,mkv` | extensions picked up in folder mode |
+| `--workflow <json>` | workflow exported in API format (video) |
+| `--images <path>` | run the image node on this file or folder instead of the video node |
+| `--image-workflow <json>` | API workflow for the image node |
+| `--image-format <fmt>` | expected image output format: `png`, `avif` or `exr` |
+| `--image-extensions png,jpg` | extensions picked up in image folder mode |
+| `--extensions mp4,mkv` | extensions picked up in video folder mode |
 | `--timeout <s>` | per-file timeout (default 1200 s) |
 | `--recursive` | walk `--folder` recursively |
 | `--autostart` / `--no-autostart` | start ComfyUI when it is not listening |
@@ -189,6 +237,9 @@ DLSS5-Enhance.exe --cli --lang fr --preset x3 video.mp4
 | `--doctor` | report what is installed, change nothing |
 | `--setup` | install what is missing |
 | `--comfy-root <dir>` | point at an existing ComfyUI install |
+| `--download-comfyui` | let `--setup` download the portable ComfyUI (about 1.8 GB) without asking |
+| `--accept-runtime` | accept the DLSS 5 runtime notice and download it during `--setup` |
+| `--runtime-dir <dir>` | use an existing *DLSS 5 Visual Enhancer* runtime folder |
 | `--lang en\|fr` | interface language |
 | `--config` / `--state` | alternate configuration / settings file |
 | `--gui` / `--cli` | force the interface (default: GUI with no argument, CLI with) |
@@ -267,9 +318,11 @@ source):
 
 - **`config.yaml`** — defaults and presets, versioned, machine independent.
 - **`settings.json`** — what was detected and chosen on *this* machine
-  (ComfyUI paths, language, output folder, workflow, preset, last source).
+  (ComfyUI paths, language, output folders, workflows, preset, last sources).
   Created on demand; falls back to `%APPDATA%\dlss5-enhance\settings.json` if the
   application folder is read-only.
+- **`presets.yaml`** — the presets you created in the interface (*Save as
+  preset…*), on top of the ones in `config.yaml`. Created on demand.
 
 Precedence: command line > `settings.json` > `config.yaml` > built-in defaults.
 Relative paths in `config.yaml` are resolved against the configuration file;
@@ -301,10 +354,12 @@ Tests and lint:
 ruff check .
 ```
 
-228 unit tests cover translations, configuration precedence, presets and the
-DLSS5 settings table, workflow injection, cache-hit detection, output probing,
-the file queue, settings storage, port fallback, console hiding, installation
-checks and the GUI widgets. They run **without a GPU and without ComfyUI**.
+249 unit tests cover translations, configuration precedence, presets (shipped
+and user-made) and the DLSS5 settings table, workflow injection, cache-hit
+detection, output probing, the file queue, settings storage, port fallback,
+source upload and result staging, image formats and the pre-flight plan, console
+hiding, installation checks, ComfyUI detection and the GUI widgets. They run
+**without a GPU and without ComfyUI**.
 
 ## Licence and credits
 
@@ -329,7 +384,8 @@ This tool orchestrates other people's work and redistributes none of it:
 
 - No RunPod synchronisation, no folder watching, no scheduled task: the tool is
   started by hand and hands the machine back.
-- No image processing: the targeted node handles video files.
 - No 4x upscaling (the node stops at 3x).
-- Your DLSS5 workflow itself (model preset, style, masking) is left as you
-  exported it — only the job inputs and the upscaling mode are written.
+- The image output format is the workflow's save node's, not a dropdown: the
+  node's format sub-options only exist for the format it exports.
+- Your DLSS5 workflows themselves (model preset, style, masking) are left as you
+  exported them — only the job inputs and the upscaling mode are written.

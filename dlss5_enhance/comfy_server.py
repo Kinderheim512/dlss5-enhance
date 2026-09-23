@@ -273,7 +273,8 @@ class ComfyServer:
             raise ServerError(tr("v.root_missing", path=self.cfg.root))
         if self.cfg.python is None or not Path(self.cfg.python).is_file():
             raise ServerError(tr("v.python_missing", path=self.cfg.python))
-        module = Path(self.cfg.root) / self.cfg.server_module
+        _cwd, entry = self.cfg.server_entry()
+        module = Path(_cwd) / entry
         if not module.is_file():
             raise ServerError(tr("v.module_missing", path=module))
         node = self.node_folder()
@@ -300,7 +301,7 @@ class ComfyServer:
         try:
             process = popen_hidden(
                 command,
-                cwd=str(self.cfg.root),
+                cwd=self.cfg.server_entry()[0],
                 env=environment,
                 stdout=stream,
                 stderr=subprocess.STDOUT,

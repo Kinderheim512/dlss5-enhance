@@ -54,7 +54,12 @@ def config_for(base: Path, root: Path | None = None):
                 "ffprobe": str(node_bin(root) / "ffprobe.exe"),
             }
         }
-    return load_config(path=base / "absent.yaml", base_dir=base, overrides=overrides)
+    return load_config(
+        path=base / "absent.yaml",
+        base_dir=base,
+        overrides=overrides,
+        detect_comfy=False,
+    )
 
 
 class CheckTests(unittest.TestCase):

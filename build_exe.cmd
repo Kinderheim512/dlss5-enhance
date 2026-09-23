@@ -13,6 +13,7 @@ copy /y config.yaml dist\config.yaml >nul
 if not exist "dist\workflows" mkdir "dist\workflows"
 copy /y "workflows\README.md" "dist\workflows\README.md" >nul
 copy /y "workflows\exemple_dlss5_video.json" "dist\workflows\exemple_dlss5_video.json" >nul
+copy /y "workflows\exemple_dlss5_image.json" "dist\workflows\exemple_dlss5_image.json" >nul
 copy /y LICENSE dist\LICENSE >nul
 copy /y README.md dist\README.md >nul
 

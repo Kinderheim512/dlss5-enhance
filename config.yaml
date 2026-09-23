@@ -64,6 +64,7 @@ comfy:
   server_module: ComfyUI/main.py
   host: 127.0.0.1
   port: 8188
+  port_fallback: [8189, 8199, 8200]   # tried when the port above is taken
   startup_timeout: 240       # a cold ComfyUI start takes about 30 s
   extra_model_paths_config:  # optional, DLSS5 needs no model
   ffmpeg:                    # empty = the node's bundled ffmpeg
@@ -80,6 +81,19 @@ workflow:
   settings:
     class_type: DLSS5Settings
     upscaling_input: upscaling_mode
+  image:                     # the Images tab uses its own workflow
+    path: workflows/exemple_dlss5_image.json
+    target:
+      class_type: DLSS5EnhanceImages
+      title:
+      id:
+    loader:                  # how the source image is loaded
+      class_type: LoadImage
+      input: image
+    saver:                   # how the result is written back
+      class_types: [SaveImageAdvanced, SaveImage]
+      input: filename_prefix
+      format_input: format
 
 processing:
   quality: Auto
@@ -90,6 +104,8 @@ processing:
   verify_neural_rendering: true
   output:                    # empty = your Downloads folder
   extensions: [mp4, mov, mkv, webm]
+  image_extensions: [png, jpg, jpeg, webp, bmp, tif, tiff]
+  image_format:              # empty = keep the format of the workflow
   timeout: 1200
   max_restarts: 3
 

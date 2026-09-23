@@ -51,7 +51,7 @@ def check_gpu() -> Check:
 
 def check_comfyui(config: Config) -> Check:
     root = config.comfy.root
-    if root is None or not (Path(root) / "ComfyUI" / "main.py").is_file():
+    if root is None or not installer.looks_like_comfy(root):
         return Check("d.comfyui", MISSING, tr("d.comfy_missing"))
     if config.comfy.python is None:
         return Check("d.comfyui", BROKEN, tr("d.comfy_missing"))
@@ -145,7 +145,7 @@ def _ask_path(question: str) -> str:
 
 
 def _looks_like_comfy(path: Path) -> bool:
-    return (Path(path) / "ComfyUI" / "main.py").is_file()
+    return installer.looks_like_comfy(path)
 
 
 def resolve_comfyui(
@@ -164,6 +164,10 @@ def resolve_comfyui(
         return candidate
     if config.installed and _looks_like_comfy(Path(config.comfy.root)):
         return Path(config.comfy.root)
+    detected = installer.find_installed_comfyui()
+    if detected is not None:
+        sink.line(tr("d.found_comfyui", path=detected))
+        return detected
 
     answer = _ask_path(tr("d.ask_comfy_browse"))
     if answer:

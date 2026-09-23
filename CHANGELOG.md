@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-09-23
+
+### Added
+
+- **Image support.** A second tab drives the `DLSS5EnhanceImages` node: its own
+  queue, its own workflow, its own output folder. The source images are uploaded
+  to ComfyUI's input folder, the results are fetched back and renamed
+  `stem_YYYYMMDD-HHMMSS.ext`. The output format belongs to the workflow
+  (`SaveImageAdvanced`: PNG, AVIF or EXR) and is shown, not chosen. Command line:
+  `--images`, `--image-workflow`, `--image-format`, `--image-extensions`.
+- **Create your own presets.** In the *DLSS5 settings* tab, *Save as preset…*
+  stores the current sliders under a name of your choice; your presets live in
+  `presets.yaml` next to the application and can be deleted from the interface.
+- **ComfyUI is detected automatically.** No popup on the first run: the tool
+  looks for an installed ComfyUI (portable build, desktop app, source checkout)
+  and takes ffmpeg/ffprobe from the node pack it finds, so an installation that
+  already works is reported as ready. *Setup…* is offered only when something
+  really is missing.
+
+### Changed
+
+- The interface is now **tabbed**: *Video*, *Images*, *DLSS5 settings*. The
+  settings tab is shared by both modes.
+- The upscaling mode is a slider with a live readout of the resulting size, and
+  every setting you change by hand is marked with a bullet so you can see what
+  will be written into the workflow.
+
+### Fixed
+
+- The container/codec row was drawn on top of the other fields: each now has its
+  own labelled line, and the *Advanced* toggle only hides and shows its own rows
+  instead of overlapping the controls that were already there.
+- The upscaling control now really moves the preset's slider (and the size
+  readout) instead of leaving it untouched.
+- The GUI worker thread no longer reads any Tk variable — including the *Force a
+  new render* checkbox — which crashed a run with
+  `main thread is not in main loop`.
+- Deleting the preset that was currently selected no longer opens a blocking
+  dialog: the run falls back to the workflow's own values and says so.
+
 ## [1.2.0] - 2026-09-23
 
 ### Added
@@ -102,6 +142,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `dlss5-enhance.spec` and `build_exe.cmd` to build a single-file executable
   with PyInstaller.
 
+[1.3.0]: ../../releases/tag/v1.3.0
 [1.2.0]: ../../releases/tag/v1.2.0
 [1.1.0]: ../../releases/tag/v1.1.0
 [1.0.0]: ../../releases/tag/v1.0.0

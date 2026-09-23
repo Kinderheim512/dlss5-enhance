@@ -17,6 +17,8 @@ TOOL_ROOT = tool_root()
 
 EXAMPLE_WORKFLOW = "workflows/exemple_dlss5_video.json"
 DEFAULT_WORKFLOW = EXAMPLE_WORKFLOW
+EXAMPLE_IMAGE_WORKFLOW = "workflows/exemple_dlss5_image.json"
+DEFAULT_IMAGE_WORKFLOW = EXAMPLE_IMAGE_WORKFLOW
 DEFAULT_CONFIG_NAME = "config.yaml"
 
 

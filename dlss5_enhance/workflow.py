@@ -40,6 +40,18 @@ def missing_workflow_message(path: str | Path) -> str:
     return "\n".join(lines)
 
 
+def resolve_by_class_types(
+    workflow: Mapping[str, Any], class_types: Iterable[str]
+) -> tuple[str, str] | None:
+    """First node matching one of the class types: (node id, class type)."""
+    for class_type in class_types:
+        try:
+            return resolve_target(workflow, TargetSelector(class_type=class_type)), class_type
+        except WorkflowError:
+            continue
+    return None
+
+
 def load_workflow(path: str | Path) -> dict[str, Any]:
     """Read an API-format workflow JSON exported from ComfyUI."""
     workflow_path = Path(path)
@@ -145,6 +157,31 @@ def build_prompt(
 
     if force:
         prompt[target_id]["is_changed"] = is_changed_token or "dlss5-enhance-force"
+    return prompt
+
+
+def inject_values(prompt: dict[str, Any], node_id: str, values: Mapping[str, Any]) -> None:
+    """Write values into one node of a copied prompt, checking the input names."""
+    _inject(prompt, node_id, values)
+
+
+def build_image_prompt(
+    workflow: Mapping[str, Any],
+    loader_id: str,
+    loader_values: Mapping[str, Any],
+    saver_id: str,
+    saver_values: Mapping[str, Any],
+    settings_id: str | None = None,
+    settings_values: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Copy the image workflow and inject the job into loader, saver and settings."""
+    prompt = copy.deepcopy(dict(workflow))
+    _inject(prompt, loader_id, loader_values)
+    _inject(prompt, saver_id, saver_values)
+    if settings_values:
+        if not settings_id:
+            raise WorkflowError(tr("w.settings_needed"))
+        _inject(prompt, settings_id, settings_values)
     return prompt
 
 

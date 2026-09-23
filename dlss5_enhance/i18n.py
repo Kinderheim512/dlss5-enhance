@@ -380,6 +380,10 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "  upscaling         : {factor:g}x  ->  output {width}x{height}",
         "  upscaling         : {factor:g}x  ->  sortie {width}x{height}",
     ),
+    "j.plan_image_format": (
+        "  image format      : {format}",
+        "  format image      : {format}",
+    ),
     "j.plan_output": ("  output folder     : {path}", "  dossier de sortie : {path}"),
     "j.plan_encoders": ("  encoders          : {table}", "  encodeurs         : {table}"),
     "j.plan_files": ("  files ({count}):", "  fichiers ({count}) :"),
@@ -582,6 +586,69 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "(the workflow's own values)",
         "(les valeurs du workflow)",
     ),
+    "j.image_header": (
+        "[{index}/{total}] {name} — image, output {fmt}",
+        "[{index}/{total}] {name} — image, sortie {fmt}",
+    ),
+    "j.image_extra": ("  also wrote {path}", "  a aussi écrit {path}"),
+    "j.image_not_configured": (
+        "No image workflow configured (workflow.image.path).",
+        "Aucun workflow image configuré (workflow.image.path).",
+    ),
+    "j.no_loader": (
+        "The image workflow has no {class_type} node to feed the image into.",
+        "Le workflow image n'a pas de node {class_type} pour recevoir l'image.",
+    ),
+    "j.no_saver": (
+        "The image workflow has no save node ({types}): the result would be lost.",
+        "Le workflow image n'a pas de node de sauvegarde ({types}) : le résultat serait perdu.",
+    ),
+    "j.no_comfy_folders": (
+        "ComfyUI did not report its input/output folders (/internal/folder_paths).",
+        "ComfyUI n'a pas indiqué ses dossiers input/output (/internal/folder_paths).",
+    ),
+    "j.stage_failed": (
+        "Could not copy the image into ComfyUI's input folder: {error}",
+        "Impossible de copier l'image dans le dossier input de ComfyUI : {error}",
+    ),
+    "j.image_mode": (
+        "Image mode: {count} source(s)",
+        "Mode image : {count} source(s)",
+    ),
+    "c.upload_failed": (
+        "Could not upload {name} to ComfyUI: {error}",
+        "Impossible de téléverser {name} vers ComfyUI : {error}",
+    ),
+    "c.upload_http": (
+        "Uploading {name} returned HTTP {status}.",
+        "Le téléversement de {name} a renvoyé HTTP {status}.",
+    ),
+    "c.upload_json": (
+        "Uploading {name} did not return a usable answer.",
+        "Le téléversement de {name} n'a pas renvoyé de réponse exploitable.",
+    ),
+    "j.format_fixed": (
+        "This workflow's save node always writes {fmt}: the format cannot be changed "
+        "here.",
+        "Le node de sauvegarde de ce workflow écrit toujours du {fmt} : le format ne "
+        "peut pas être changé ici.",
+    ),
+    "j.format_needs_export": (
+        "This workflow writes {current} (its {node} node only carries the {current} "
+        "inputs, not {keys}). To get {wanted}, choose that format in ComfyUI and "
+        "export the workflow again — a dynamic format cannot be switched from here.",
+        "Ce workflow écrit du {current} (son node {node} ne porte que les entrées "
+        "{current}, pas {keys}). Pour obtenir du {wanted}, choisis ce format dans "
+        "ComfyUI et réexporte le workflow — un format dynamique ne se change pas d'ici.",
+    ),
+    "u.preset_gone": (
+        "The preset {name} no longer exists: falling back to the default one.",
+        "Le preset {name} n'existe plus : retour au preset par défaut.",
+    ),
+    "d.found_comfyui": (
+        "Found ComfyUI at {path}.",
+        "ComfyUI trouvé dans {path}.",
+    ),
     # doctor / setup
     "d.header": ("Installation check:", "Vérification de l'installation :"),
     "d.gpu": ("NVIDIA GPU and driver", "GPU NVIDIA et pilote"),
@@ -684,9 +751,62 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "Runtime not installed: re-run --setup and accept the notice (or pass --runtime-dir).",
         "Runtime non installé : relancer --setup et accepter l'avis (ou passer --runtime-dir).",
     ),
-    "u.tab.files": ("Files", "Fichiers"),
+    "u.tab.video": ("Video", "Vidéo"),
+    "u.tab.image": ("Images", "Images"),
     "u.tab.settings": ("DLSS5 settings", "Réglages DLSS5"),
-    "u.section.queue": ("Files to process", "Fichiers à traiter"),
+    "u.section.queue.video": ("Videos to process", "Vidéos à traiter"),
+    "u.section.queue.image": ("Images to process", "Images à traiter"),
+    "u.image_format": ("Format", "Format"),
+    "u.image_format_hint": (
+        "The format comes from the workflow's save node (PNG, AVIF or EXR). To change "
+        "it, pick another format in ComfyUI and export the workflow again. Any input "
+        "format (jpg, webp, png…) works: the result is renamed "
+        "{name}_{date}.{ext} in your output folder.",
+        "Le format vient du node de sauvegarde du workflow (PNG, AVIF ou EXR). Pour en "
+        "changer, choisis un autre format dans ComfyUI et réexporte le workflow. Tous les "
+        "formats d'entrée (jpg, webp, png…) sont acceptés : le résultat est renommé "
+        "{name}_{date}.{ext} dans ton dossier de sortie.",
+    ),
+    "u.size_line": (
+        "First file: {src_w}x{src_h} -> {out_w}x{out_h}",
+        "Premier fichier : {src_w}x{src_h} -> {out_w}x{out_h}",
+    ),
+    "u.size_unknown": ("Upscaling {factor}x", "Upscaling {factor}x"),
+    "u.save_preset": ("Save as preset…", "Enregistrer comme preset…"),
+    "u.delete_preset": ("Delete preset", "Supprimer le preset"),
+    "u.preset_name": ("Preset name", "Nom du preset"),
+    "u.preset_name_invalid": (
+        "That name cannot be used: letters, digits, dashes and underscores only.",
+        "Ce nom ne peut pas être utilisé : lettres, chiffres, tirets et soulignés seulement.",
+    ),
+    "u.preset_saved": (
+        "Preset {name} saved to {path}",
+        "Preset {name} enregistré dans {path}",
+    ),
+    "u.preset_builtin": (
+        "That preset ships with the tool: only your own presets can be deleted.",
+        "Ce preset est livré avec l'outil : seuls tes propres presets peuvent être supprimés.",
+    ),
+    "u.preset_confirm": (
+        "Delete the preset {name}?",
+        "Supprimer le preset {name} ?",
+    ),
+    "u.banner": (
+        "Installation incomplete: {count} item(s) missing.",
+        "Installation incomplète : {count} élément(s) manquant(s).",
+    ),
+    "u.banner_action": ("Fix it…", "Corriger…"),
+    "d.allow_download": (
+        "Allow downloading ComfyUI (about 1.8 GB) if it is not installed",
+        "Autoriser le téléchargement de ComfyUI (environ 1,8 Go) s'il n'est pas installé",
+    ),
+    "d.install": ("Install what is missing", "Installer ce qui manque"),
+    "d.checking": ("Checking…", "Vérification…"),
+    "d.installing": ("Installing…", "Installation…"),
+    "j.mode_line": (
+        "{mode} mode: {count} source(s)",
+        "Mode {mode} : {count} source(s)",
+    ),
     "u.add_files": ("Add files…", "Ajouter des fichiers…"),
     "u.add_folder": ("Add a folder…", "Ajouter un dossier…"),
     "u.remove": ("Remove", "Retirer"),

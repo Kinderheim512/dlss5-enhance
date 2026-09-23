@@ -22,10 +22,13 @@ class AppSettings:
     ffmpeg: str | None = None
     ffprobe: str | None = None
     output_dir: str | None = None
+    image_output_dir: str | None = None
     workflow: str | None = None
+    image_workflow: str | None = None
     preset: str | None = None
     source: str | None = None
     sources: list[str] = field(default_factory=list)
+    image_sources: list[str] = field(default_factory=list)
     container: str | None = None
     codec: str | None = None
     settings: dict[str, object] = field(default_factory=dict)
@@ -48,7 +51,7 @@ class AppSettings:
                 continue
             if key == "comfy_port" and isinstance(value, (int, float, str)):
                 clean[key] = int(value)
-            elif key == "sources" and isinstance(value, list):
+            elif key in ("sources", "image_sources") and isinstance(value, list):
                 clean[key] = [str(item) for item in value]
             elif key == "settings" and isinstance(value, dict):
                 clean[key] = {

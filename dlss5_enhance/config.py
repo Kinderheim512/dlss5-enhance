@@ -9,13 +9,20 @@ from typing import Any
 
 import yaml
 
-from .app_paths import DEFAULT_CONFIG_NAME, DEFAULT_WORKFLOW, TOOL_ROOT, downloads_dir
+from .app_paths import (
+    DEFAULT_CONFIG_NAME,
+    DEFAULT_IMAGE_WORKFLOW,
+    DEFAULT_WORKFLOW,
+    TOOL_ROOT,
+    downloads_dir,
+)
 from .errors import UsageError
 from .i18n import tr
 from .mappings import normalize_extensions
 from .presets import Preset, load_presets, resolve_preset
 
 DEFAULT_EXTENSIONS = ("mp4", "mov", "mkv", "webm")
+DEFAULT_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff")
 
 PRESET_JOB_VALUES: dict[str, Any] = {
     "quality": "Best",
@@ -99,11 +106,28 @@ class ComfyConfig:
     def ws_url(self) -> str:
         return f"ws://{self.host}:{self.port}/ws"
 
+    def server_entry(self) -> tuple[str, str]:
+        """(working directory, script) for `python -s <script>`.
+
+        ComfyUI ships either as a folder holding `ComfyUI/main.py` or as the
+        application folder itself; both are accepted.
+        """
+        root = Path(self.root) if self.root is not None else Path()
+        if (root / self.server_module).is_file():
+            return str(root), self.server_module
+        if (root / "main.py").is_file():
+            return str(root), "main.py"
+        nested = root / "ComfyUI" / "main.py"
+        if nested.is_file():
+            return str(root / "ComfyUI"), "main.py"
+        return str(root), self.server_module
+
     def server_command(self, port: int | None = None) -> list[str]:
+        _cwd, entry = self.server_entry()
         command = [
             str(self.python),
             "-s",
-            self.server_module,
+            entry,
             "--listen",
             self.host,
             "--port",
@@ -123,11 +147,25 @@ class TargetSelector:
 
 
 @dataclass(frozen=True)
+class ImageWorkflowConfig:
+    path: Path
+    loader_class_type: str = "LoadImage"
+    loader_input: str = "image"
+    saver_class_types: tuple[str, ...] = ("SaveImageAdvanced", "SaveImage")
+    saver_input: str = "filename_prefix"
+    saver_format_input: str = "format"
+
+
+@dataclass(frozen=True)
 class WorkflowConfig:
     path: Path
     target: TargetSelector = field(default_factory=TargetSelector)
     settings_class_type: str = "DLSS5Settings"
     settings_upscaling_input: str = "upscaling_mode"
+    image: ImageWorkflowConfig | None = None
+    image_target: TargetSelector = field(
+        default_factory=lambda: TargetSelector(class_type="DLSS5EnhanceImages")
+    )
 
 
 @dataclass(frozen=True)
@@ -140,6 +178,8 @@ class ProcessingConfig:
     verify_neural_rendering: bool = True
     output: Path | None = None
     extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
+    image_extensions: tuple[str, ...] = DEFAULT_IMAGE_EXTENSIONS
+    image_format: str | None = None
     timeout: float = 1200.0
     max_restarts: int = 3
 
@@ -191,6 +231,16 @@ def _defaults(base_dir: Path) -> dict[str, Any]:
         },
         "workflow": {
             "path": DEFAULT_WORKFLOW,
+            "image": {
+                "path": DEFAULT_IMAGE_WORKFLOW,
+                "target": {"class_type": "DLSS5EnhanceImages", "title": None, "id": None},
+                "loader": {"class_type": "LoadImage", "input": "image"},
+                "saver": {
+                    "class_types": ["SaveImageAdvanced", "SaveImage"],
+                    "input": "filename_prefix",
+                    "format_input": "format",
+                },
+            },
             "target": {"class_type": "DLSS5EnhanceVideoFile", "title": None, "id": None},
             "settings": {
                 "class_type": "DLSS5Settings",
@@ -206,6 +256,8 @@ def _defaults(base_dir: Path) -> dict[str, Any]:
             "verify_neural_rendering": True,
             "output": None,
             "extensions": list(DEFAULT_EXTENSIONS),
+            "image_extensions": list(DEFAULT_IMAGE_EXTENSIONS),
+            "image_format": None,
             "timeout": 1200,
             "max_restarts": 3,
         },
@@ -322,6 +374,7 @@ def load_config(
     base_dir: Path | None = None,
     settings: Any = None,
     app_root: Path | None = None,
+    detect_comfy: bool = True,
 ) -> Config:
     """Load config.yaml, layer settings.json then the CLI overrides, resolve paths."""
     root = app_root if app_root is not None else TOOL_ROOT
@@ -340,6 +393,12 @@ def load_config(
         raw = _deep_merge(raw, loaded)
 
     raw = _deep_merge(raw, settings_overrides(settings, root))
+
+    from .presets_store import load_user_presets, presets_path
+
+    user_presets = load_user_presets(presets_path(origin))
+    if user_presets:
+        raw = _deep_merge(raw, {"presets": user_presets})
 
     presets = load_presets(raw.get("presets"))
     preset_name = None
@@ -361,11 +420,18 @@ def load_config(
     run_cfg = raw.get("run", {})
 
     extensions = normalize_extensions(processing.get("extensions")) or DEFAULT_EXTENSIONS
+    image_extensions = (
+        normalize_extensions(processing.get("image_extensions")) or DEFAULT_IMAGE_EXTENSIONS
+    )
     timeout = _as_float(processing.get("timeout", 1200), "processing.timeout")
     if timeout <= 0:
         raise UsageError(tr("g.timeout_positive"))
 
     comfy_root = _resolve_path(comfy.get("root"), origin)
+    if comfy_root is None and detect_comfy:
+        from .installer import find_installed_comfyui
+
+        comfy_root = find_installed_comfyui()
     comfy_python = derive_python(comfy_root, comfy.get("python"))
     if comfy_python is not None and not Path(comfy_python).is_absolute():
         comfy_python = origin / Path(comfy_python)
@@ -373,6 +439,7 @@ def load_config(
 
     target = workflow.get("target") or {}
     settings_cfg = workflow.get("settings") or {}
+    image_cfg = workflow.get("image") or {}
     from .dlss5_settings import coerce_all, validate
 
     node_settings = coerce_all(dict(raw.get("dlss5_settings") or {}))
@@ -385,8 +452,8 @@ def load_config(
         port=_as_int(comfy.get("port", 8188), "comfy.port"),
         startup_timeout=_as_float(comfy.get("startup_timeout", 240), "comfy.startup_timeout"),
         extra_model_paths_config=_resolve_path(comfy.get("extra_model_paths_config"), origin),
-        ffmpeg=_resolve_path(comfy.get("ffmpeg"), origin),
-        ffprobe=_resolve_path(comfy.get("ffprobe"), origin),
+        ffmpeg=_bundled_tool(_resolve_path(comfy.get("ffmpeg"), origin), comfy_root, "ffmpeg"),
+        ffprobe=_bundled_tool(_resolve_path(comfy.get("ffprobe"), origin), comfy_root, "ffprobe"),
         server_log_dir=_resolve_path(comfy.get("server_log_dir"), origin),
         extra_args=tuple(str(item) for item in (comfy.get("extra_args") or [])),
         port_fallback=tuple(
@@ -406,6 +473,18 @@ def load_config(
             ),
             settings_class_type=str(settings_cfg.get("class_type", "DLSS5Settings")),
             settings_upscaling_input=str(settings_cfg.get("upscaling_input", "upscaling_mode")),
+            image=_image_config(image_cfg, origin),
+            image_target=TargetSelector(
+                class_type=(image_cfg.get("target") or {}).get(
+                    "class_type", "DLSS5EnhanceImages"
+                ),
+                title=(image_cfg.get("target") or {}).get("title"),
+                id=(
+                    None
+                    if (image_cfg.get("target") or {}).get("id") in (None, "")
+                    else str((image_cfg.get("target") or {}).get("id"))
+                ),
+            ),
         ),
         processing=ProcessingConfig(
             quality=str(processing.get("quality", "Auto")),
@@ -419,6 +498,9 @@ def load_config(
             ),
             output=output,
             extensions=extensions,
+            image_extensions=image_extensions,
+            image_format=(str(processing["image_format"]).lower()
+                          if processing.get("image_format") else None),
             timeout=timeout,
             max_restarts=_as_int(processing.get("max_restarts", 3), "processing.max_restarts"),
         ),
@@ -435,6 +517,38 @@ def load_config(
         presets=presets,
         preset=preset,
         settings_overrides=node_settings,
+    )
+
+
+def _bundled_tool(
+    configured: Path | None, comfy_root: Path | None, name: str
+) -> Path | None:
+    """The node pack ships ffmpeg/ffprobe: use them when nothing is configured."""
+    if configured is not None:
+        return configured
+    if comfy_root is None:
+        return None
+    from .installer import node_dir
+
+    candidate = Path(node_dir(Path(comfy_root))) / "ffmpeg" / "bin" / f"{name}.exe"
+    return candidate if candidate.is_file() else None
+
+
+def _image_config(raw: Mapping[str, Any], origin: Path) -> ImageWorkflowConfig:
+    loader = raw.get("loader") or {}
+    saver = raw.get("saver") or {}
+    return ImageWorkflowConfig(
+        path=Path(
+            _resolve_path(raw.get("path"), origin) or (origin / DEFAULT_IMAGE_WORKFLOW)
+        ),
+        loader_class_type=str(loader.get("class_type", "LoadImage")),
+        loader_input=str(loader.get("input", "image")),
+        saver_class_types=tuple(
+            str(item)
+            for item in (saver.get("class_types") or ["SaveImageAdvanced", "SaveImage"])
+        ),
+        saver_input=str(saver.get("input", "filename_prefix")),
+        saver_format_input=str(saver.get("format_input", "format")),
     )
 
 

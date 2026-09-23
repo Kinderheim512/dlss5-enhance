@@ -79,7 +79,7 @@ class ConfigTests(unittest.TestCase):
     def test_server_command_contains_listen_and_port(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            config = load_config(path=base / "absent.yaml", base_dir=base)
+            config = load_config(path=base / "absent.yaml", base_dir=base, detect_comfy=False)
         command = config.comfy.server_command()
         self.assertIn("--listen", command)
         self.assertIn("127.0.0.1", command)
@@ -100,6 +100,36 @@ class ConfigTests(unittest.TestCase):
         command = config.comfy.server_command()
         self.assertEqual(command[0], "D:\\tools\\python.exe")
         self.assertIn("9000", command)
+
+    def test_ffmpeg_falls_back_to_the_one_the_node_pack_ships(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "main.py").write_text("", encoding="utf-8")
+            node = base / "custom_nodes" / "ComfyUI-DLSS5-Enhancer"
+            tools = node / "ffmpeg" / "bin"
+            tools.mkdir(parents=True)
+            (tools / "ffmpeg.exe").write_bytes(b"x")
+            (tools / "ffprobe.exe").write_bytes(b"x")
+            (base / "config.yaml").write_text(
+                f"comfy:\n  root: {base}\n", encoding="utf-8"
+            )
+            config = load_config(path=base / "config.yaml")
+            self.assertEqual(config.comfy.ffmpeg, tools / "ffmpeg.exe")
+            self.assertEqual(config.comfy.ffprobe, tools / "ffprobe.exe")
+
+    def test_a_configured_ffmpeg_wins_over_the_bundled_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            tools = base / "custom_nodes" / "ComfyUI-DLSS5-Enhancer" / "ffmpeg" / "bin"
+            tools.mkdir(parents=True)
+            (tools / "ffmpeg.exe").write_bytes(b"x")
+            mine = base / "my-ffmpeg.exe"
+            mine.write_bytes(b"x")
+            (base / "config.yaml").write_text(
+                f"comfy:\n  root: {base}\n  ffmpeg: my-ffmpeg.exe\n", encoding="utf-8"
+            )
+            config = load_config(path=base / "config.yaml")
+            self.assertEqual(config.comfy.ffmpeg, mine)
 
     def test_output_defaults_to_downloads_and_workflow_to_the_example(self):
         with tempfile.TemporaryDirectory() as tmp:
