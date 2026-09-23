@@ -787,6 +787,11 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "That preset ships with the tool: only your own presets can be deleted.",
         "Ce preset est livré avec l'outil : seuls tes propres presets peuvent être supprimés.",
     ),
+    "u.preset_selected": (
+        "Selected preset: {name}",
+        "Preset sélectionné : {name}",
+    ),
+    "u.preset_selected_none": ("No preset selected.", "Aucun preset sélectionné."),
     "u.preset_confirm": (
         "Delete the preset {name}?",
         "Supprimer le preset {name} ?",

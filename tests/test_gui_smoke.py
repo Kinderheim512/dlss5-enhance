@@ -416,6 +416,48 @@ class GuiSmokeTests(unittest.TestCase):
                 again.shutdown()
                 root2.destroy()
 
+    def test_a_user_preset_cannot_shadow_a_shipped_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, base = self._app(tmp)
+            try:
+                root.update()
+                shipped = app.config.presets["un"].label
+                (base / "presets.yaml").write_text(
+                    "presets:\n  mien:\n    label: Premier\n    upscaling_mode: 2x\n",
+                    encoding="utf-8",
+                )
+                app._load_config()
+                root.update()
+                labels = list(app.tabs["video"].user_box.cget("values"))
+                self.assertEqual(len(labels), 1)
+                self.assertNotEqual(labels[0], shipped)
+                self.assertIn("mien", labels[0])
+                self.assertIn(
+                    shipped,
+                    [b.cget("text") for b in app.tabs["video"].preset_radios.values()],
+                )
+            finally:
+                app.shutdown()
+                root.destroy()
+
+    def test_the_settings_tab_names_the_preset_that_delete_would_remove(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, app, _ = self._app(tmp)
+            try:
+                root.update()
+                active = app.config.presets[app.preset_var.get()]
+                self.assertIn(active.label, app.preset_status_var.get())
+                app.preset_var.set("deux")
+                app._apply_preset()
+                root.update()
+                self.assertIn("Second", app.preset_status_var.get())
+                app._save_preset_named("maison")
+                root.update()
+                self.assertIn("maison", app.preset_status_var.get())
+            finally:
+                app.shutdown()
+                root.destroy()
+
     def test_the_run_uses_the_preset_picked_in_the_dropdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, app, _ = self._app(tmp)

@@ -1,14 +1,22 @@
-# dlss5-enhance 1.3.1
+# dlss5-enhance 1.3.2
 
 Run **NVIDIA DLSS 5 neural rendering** over your videos *and your images*, on
 your own machine, through ComfyUI — with one click or one command line.
 
 ## Download
 
-- `DLSS5-Enhance-1.3.1.zip` — unzip it anywhere and run `DLSS5-Enhance.exe`.
+- `DLSS5-Enhance-1.3.2.zip` — unzip it anywhere and run `DLSS5-Enhance.exe`.
   This is the recommended download: the folder is portable, `config.yaml` and the
   example workflows are included.
 - `DLSS5-Enhance.exe` — the bare executable, if you already have the rest.
+
+## What's new in 1.3.2
+
+- The *Custom presets* block now names the preset *Delete preset* would remove,
+  so you can see the target without switching back to a media tab.
+- A preset of your own whose name matches a shipped one no longer produces two
+  identical-looking entries: the dropdown marks it (`Upscale x2 (ups)`), the
+  button keeps its own label.
 
 ## What's new in 1.3.1
 

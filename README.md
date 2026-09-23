@@ -104,10 +104,13 @@ name you type, in `presets.yaml` next to the application (next to
 `config.yaml`). The preset then appears in the *My presets* dropdown of both
 media tabs, selected and ready, and is picked by `--preset` like any other.
 *Delete preset* removes the one currently selected (only your own — the shipped
-ones are read-only). `presets.yaml` is machine-specific and is never committed.
+ones are read-only), and the block names that preset so you can see the target
+without leaving the tab. `presets.yaml` is machine-specific and is never
+committed.
 
 The *DLSS5 settings* tab itself holds no preset list any more: only the two
-buttons, *Save as preset…* and *Delete preset*.
+buttons, *Save as preset…* and *Delete preset*, and the name of the selected
+preset.
 
 **There is no 4x.** The node offers exactly `1x`, `1.5x`, `1.724x`, `2x`, `3x`.
 The tool warns you before submitting when the geometry you ask for is beyond the
@@ -363,7 +366,7 @@ Tests and lint:
 ruff check .
 ```
 
-254 unit tests cover translations, configuration precedence, presets (shipped
+256 unit tests cover translations, configuration precedence, presets (shipped
 and user-made) and the DLSS5 settings table, workflow injection, cache-hit
 detection, output probing, the file queue, settings storage, port fallback,
 source upload and result staging, image formats and the pre-flight plan, console

@@ -473,6 +473,11 @@ class App:
         self.delete_preset_button = ttk.Button(actions, command=self._delete_preset)
         self._t(self.delete_preset_button, "u.delete_preset")
         self.delete_preset_button.pack(side="left", padx=6)
+        self.preset_status_var = tk.StringVar(value=tr("u.preset_selected_none"))
+        self.preset_status = ttk.Label(
+            preset_frame, textvariable=self.preset_status_var, foreground="#555555"
+        )
+        self.preset_status.pack(anchor="w", pady=(6, 0))
 
         header = ttk.Frame(parent)
         header.pack(fill="x", pady=(6, 0))
@@ -695,13 +700,15 @@ class App:
         raw = presets_store.load_user_presets(presets_store.presets_path(self._config_dir()))
         self._user_names = {name for name in raw if name in presets}
         self._user_labels = {}
-        taken: set[str] = set()
+        taken: set[str] = {
+            preset.label or name
+            for name, preset in presets.items()
+            if name not in self._user_names
+        }
         for name, preset in presets.items():
             if name not in self._user_names:
                 continue
-            label = preset.label or name
-            if label in taken:
-                label = f"{label} ({name})"
+            label = _unique_label(preset.label or name, name, taken)
             taken.add(label)
             self._user_labels[label] = name
 
@@ -751,6 +758,12 @@ class App:
         state = "normal" if self._user_names else "disabled"
         with contextlib.suppress(tk.TclError):
             self.delete_preset_button.configure(state=state)
+        preset = self.config.presets.get(active) if self.config is not None else None
+        self.preset_status_var.set(
+            tr("u.preset_selected", name=preset.label)
+            if preset is not None
+            else tr("u.preset_selected_none")
+        )
 
     def _on_user_preset(self, _event=None) -> None:
         """A pick in the dropdown is a preset pick like any other."""
@@ -1387,6 +1400,18 @@ class SetupDialog:
         self.app._load_config()
         self.app._check_installation()
         self.refresh()
+
+
+def _unique_label(base: str, name: str, taken: set[str]) -> str:
+    """A dropdown entry that cannot be confused with another one."""
+    label = base
+    if label in taken:
+        label = f"{base} ({name})"
+    index = 2
+    while label in taken:
+        label = f"{base} ({name} {index})"
+        index += 1
+    return label
 
 
 def make_root() -> tk.Tk:

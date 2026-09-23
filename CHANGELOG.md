@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - 2026-09-23
+
+### Added
+
+- The *Custom presets* block names the preset *Delete preset* would remove, so
+  the target is visible without going back to a media tab.
+
+### Fixed
+
+- A preset of your own whose name matches a shipped one no longer shows two
+  identical entries: the dropdown marks it (`Upscale x2 (ups)`) while the
+  button keeps its own label.
+
 ## [1.3.1] - 2026-09-23
 
 ### Changed
@@ -162,6 +175,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `dlss5-enhance.spec` and `build_exe.cmd` to build a single-file executable
   with PyInstaller.
 
+[1.3.2]: ../../releases/tag/v1.3.2
 [1.3.1]: ../../releases/tag/v1.3.1
 [1.3.0]: ../../releases/tag/v1.3.0
 [1.2.0]: ../../releases/tag/v1.2.0
